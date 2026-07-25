@@ -5,10 +5,14 @@
  *
  *  - PIN authentication against secretaries cached in IndexedDB
  *  - Dynamic data: students / settings / secretaries fetched from API
- *  - Secretary view: search, quick attendance, grades/notes, offline save
- *  - Add-Student (offline-first, pending_creation flow)
+ *  - Dark / Light theme toggle (persisted in localStorage)
+ *  - Secretary view: search, quick attendance, grades/notes (with
+ *    configurable max grades), offline save
+ *  - Add-Student (offline-first, pending_creation flow, sequential IDs)
  *  - Role-Based Access Control: secretaries only see their allowedGroups
- *  - Master view: stats + combined pending-approvals queue + secretary mgmt
+ *  - Master view: stats + combined pending-approvals queue
+ *  - Manage Secretaries: add / edit accounts + group permissions
+ *  - Export today's approvals report to CSV/Excel
  *  - Offline-first queue in IndexedDB (via db.js)
  *  - Auto background sync to an API endpoint when online
  * -------------------------------------------------------------
@@ -23,12 +27,21 @@
 
   const CONFIG = {
     // Replace with your real backend endpoint (REST API / Apps Script / etc).
-    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbwrBXqCM3POhflij36kfPMLMi22CV9U1lUywb0Kv_ADWssxvNWW-YPEw7-UzC54Jyiz/exec',
+    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbyWV-61vjKv4DosCKvnFbemq9BfTOSzAZY4baLPoudCNAy1hSTadTUiA_e9JwLv6XIu/exec',
 
     PIN_LENGTH: 4,
 
     SYNC_RETRY_INTERVAL_MS: 30000,
     TOAST_DURATION_MS: 3200,
+
+    // Starting point for sequential student IDs (Feature 5).
+    STUDENT_ID_START: 1000,
+
+    // Default max grade values used when creating a brand-new record.
+    DEFAULT_HOMEWORK_MAX: 20,
+    DEFAULT_EXAM_MAX: 20,
+
+    THEME_STORAGE_KEY: 'sayyad_theme',
   };
 
   // Local fallback lists used only if the settings store has nothing
@@ -57,6 +70,7 @@
     editingRecordId: null,
     pendingConfirmAction: null,
     activeSecretaryIdForPerms: null,
+    editingSecretaryId: null, // null = "add new" mode in the secretary form modal
   };
 
   /* =====================================================================
@@ -135,6 +149,7 @@
     cacheDom();
     bindStaticEvents();
     registerServiceWorker();
+    applySavedTheme();
 
     await db.init();
 
@@ -177,6 +192,7 @@
     els.app = $('#app');
     els.syncBadge = $('#syncBadge');
     els.syncBadgeText = $('#syncBadgeText');
+    els.themeToggleBtn = $('#themeToggleBtn');
     els.logoutBtn = $('#logoutBtn');
     els.addStudentBtn = $('#addStudentBtn');
     els.manageSecretariesBtn = $('#manageSecretariesBtn');
@@ -201,6 +217,7 @@
     els.approvalsList = $('#approvalsList');
     els.noApprovals = $('#noApprovals');
     els.approveAllBtn = $('#approveAllBtn');
+    els.exportExcelBtn = $('#exportExcelBtn');
 
     els.studentCardTemplate = $('#studentCardTemplate');
     els.approvalCardTemplate = $('#approvalCardTemplate');
@@ -212,7 +229,9 @@
     els.editPresentBtn = $('#editPresentBtn');
     els.editAbsentBtn = $('#editAbsentBtn');
     els.editHomeworkGrade = $('#editHomeworkGrade');
+    els.editHomeworkMax = $('#editHomeworkMax');
     els.editExamGrade = $('#editExamGrade');
+    els.editExamMax = $('#editExamMax');
     els.editNotes = $('#editNotes');
     els.saveEditBtn = $('#saveEditBtn');
     els.deleteRecordBtn = $('#deleteRecordBtn');
@@ -240,6 +259,7 @@
     els.manageSecretariesModalClose = $('#manageSecretariesModalClose');
     els.secretariesList = $('#secretariesList');
     els.noSecretaries = $('#noSecretaries');
+    els.addSecretaryBtn = $('#addSecretaryBtn');
 
     // Secretary permissions modal
     els.secretaryPermsModal = $('#secretaryPermsModal');
@@ -250,6 +270,16 @@
     els.cancelSecretaryPermsBtn = $('#cancelSecretaryPermsBtn');
     els.saveSecretaryPermsBtn = $('#saveSecretaryPermsBtn');
 
+    // Secretary add/edit form modal
+    els.secretaryFormModal = $('#secretaryFormModal');
+    els.secretaryFormModalClose = $('#secretaryFormModalClose');
+    els.secretaryFormTitle = $('#secretaryFormTitle');
+    els.secretaryFormName = $('#secretaryFormName');
+    els.secretaryFormPin = $('#secretaryFormPin');
+    els.secretaryFormRole = $('#secretaryFormRole');
+    els.cancelSecretaryFormBtn = $('#cancelSecretaryFormBtn');
+    els.saveSecretaryFormBtn = $('#saveSecretaryFormBtn');
+
     els.toastContainer = $('#toastContainer');
   }
 
@@ -257,6 +287,29 @@
     setTimeout(() => {
       els.splashScreen.classList.add('fade-out');
     }, 450);
+  }
+
+  /* =====================================================================
+     FEATURE 1 — DARK / LIGHT THEME TOGGLE
+     ===================================================================== */
+
+  function applySavedTheme() {
+    let saved = null;
+    try { saved = localStorage.getItem(CONFIG.THEME_STORAGE_KEY); } catch (_) { /* noop */ }
+
+    // Default to light theme on first-ever visit (matches the app's
+    // original look); afterwards the user's explicit choice always wins.
+    const isLight = saved ? saved === 'light' : true;
+    document.body.classList.toggle('light-theme', isLight);
+  }
+
+  function toggleTheme() {
+    const isNowLight = !document.body.classList.contains('light-theme');
+    document.body.classList.toggle('light-theme', isNowLight);
+    try {
+      localStorage.setItem(CONFIG.THEME_STORAGE_KEY, isNowLight ? 'light' : 'dark');
+    } catch (_) { /* noop */ }
+    vibrate(10);
   }
 
   /* =====================================================================
@@ -282,7 +335,6 @@
     try {
       if (!CONFIG.API_ENDPOINT || CONFIG.API_ENDPOINT.includes('REPLACE_WITH_YOUR_DEPLOYMENT_ID')) {
         console.info('[Init] لا يوجد رابط API مضبوط — سيعمل التطبيق بالبيانات المخزنة محليًا فقط (إن وجدت).');
-        // Ensure settings has at least a usable fallback so dropdowns work.
         if (!state.settings || Object.keys(state.settings).length === 0) {
           for (const key of Object.keys(FALLBACK_SETTINGS)) {
             await db.setSetting(key, FALLBACK_SETTINGS[key]);
@@ -292,7 +344,7 @@
         return;
       }
 
-      const res = await fetch(`${CONFIG.API_ENDPOINT}?action=bootstrap`, { method: 'GET' });
+      const res = await fetch(`${CONFIG.API_ENDPOINT}?action=bootstrap&t=${Date.now()}`, { method: 'GET' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -320,7 +372,6 @@
       console.info('[Init] تم تحديث البيانات من الخادم بنجاح.');
     } catch (err) {
       console.warn('[Init] تعذّر جلب البيانات الأولية من الخادم.', err);
-      // Fall back to local settings so dropdowns aren't empty on first run.
       if (!state.settings || Object.keys(state.settings).length === 0) {
         for (const key of Object.keys(FALLBACK_SETTINGS)) {
           await db.setSetting(key, FALLBACK_SETTINGS[key]);
@@ -402,8 +453,10 @@
     });
 
     els.logoutBtn.addEventListener('click', handleLogout);
+    els.themeToggleBtn.addEventListener('click', toggleTheme);
     els.addStudentBtn.addEventListener('click', openAddStudentModal);
     els.manageSecretariesBtn.addEventListener('click', openManageSecretariesModal);
+    els.exportExcelBtn.addEventListener('click', exportTodayToExcel);
 
     // Search
     els.studentSearch.addEventListener('input', (e) => {
@@ -471,6 +524,7 @@
       if (e.target === els.manageSecretariesModal) closeManageSecretariesModal();
     });
     els.secretariesList.addEventListener('click', handleSecretariesListClick);
+    els.addSecretaryBtn.addEventListener('click', () => openSecretaryFormModal(null));
 
     // Secretary permissions modal
     els.secretaryPermsModalClose.addEventListener('click', closeSecretaryPermsModal);
@@ -480,6 +534,14 @@
     });
     els.secretaryGroupsChecklist.addEventListener('click', handleGroupsChecklistClick);
     els.saveSecretaryPermsBtn.addEventListener('click', saveSecretaryPerms);
+
+    // Secretary add/edit form modal
+    els.secretaryFormModalClose.addEventListener('click', closeSecretaryFormModal);
+    els.cancelSecretaryFormBtn.addEventListener('click', closeSecretaryFormModal);
+    els.secretaryFormModal.addEventListener('click', (e) => {
+      if (e.target === els.secretaryFormModal) closeSecretaryFormModal();
+    });
+    els.saveSecretaryFormBtn.addEventListener('click', saveSecretaryForm);
   }
 
   async function attemptLogin(pin) {
@@ -595,7 +657,7 @@
   /**
    * Pushes to the API, in order:
    *   1. Students pending creation (offline-added students)
-   *   2. Secretaries pending sync (permission changes from master)
+   *   2. Secretaries pending sync (new accounts / permission / info changes)
    *   3. Approved / failed attendance records
    * This never blocks the UI — it runs silently in the background.
    */
@@ -684,6 +746,13 @@
     if (state.currentUser?.role === 'secretary') updatePendingBadgeSecretary();
   }
 
+  /**
+   * Record payload sent to the API. Grades are sent alongside their max
+   * values (homeworkMax/examMax) so the backend can store "15/20" style
+   * results, not just a raw number. secretaryName / approvedBy travel
+   * with every record for a full audit trail of who logged and who
+   * approved each entry (Feature 6).
+   */
   async function pushRecordToApi(record) {
     if (!isApiConfigured()) {
       console.info('[Sync] لا يوجد رابط API مضبوط — تم تجاوز الإرسال الفعلي (سجل).', record);
@@ -701,9 +770,12 @@
           group: record.group,
           attendance: record.attendance,
           homeworkGrade: record.homeworkGrade,
+          homeworkMax: record.homeworkMax,
           examGrade: record.examGrade,
+          examMax: record.examMax,
           notes: record.notes,
           secretaryName: record.secretaryName,
+          secretaryId: record.secretaryId,
           approvedBy: record.approvedBy,
           dateKey: record.dateKey,
           createdAt: record.createdAt,
@@ -761,7 +833,6 @@
     if (!('serviceWorker' in navigator)) return;
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').then((reg) => {
-        // Listen for updates and refresh caches silently.
         reg.addEventListener('updatefound', () => {
           const newWorker = reg.installing;
           if (!newWorker) return;
@@ -775,9 +846,6 @@
         console.warn('[SW] فشل تسجيل Service Worker', err);
       });
 
-      // Also try to register background sync if supported, purely as an
-      // enhancement — the interval-based triggerSync() above is the
-      // reliable cross-browser fallback.
       navigator.serviceWorker.ready.then((reg) => {
         if ('sync' in reg) {
           reg.sync.register('sayyad-sync-queue').catch(() => {});
@@ -839,7 +907,6 @@
 
   function getTodayRecordForStudent(studentId) {
     const today = todayKey();
-    // Prefer the most recent non-approved-cleared record for today.
     const candidates = state.records.filter(
       (r) => r.studentId === studentId && r.dateKey === today
     );
@@ -883,6 +950,12 @@
       tags.appendChild(pendingTag);
     }
 
+    // Default max-grade values for a brand-new (never-saved) record.
+    const hwMaxInput = node.querySelector('[data-field="homeworkMax"]');
+    const examMaxInput = node.querySelector('[data-field="examMax"]');
+    if (hwMaxInput) hwMaxInput.value = CONFIG.DEFAULT_HOMEWORK_MAX;
+    if (examMaxInput) examMaxInput.value = CONFIG.DEFAULT_EXAM_MAX;
+
     const existingRecord = getTodayRecordForStudent(student.id);
     const statusPill = node.querySelector('[data-role="statusPill"]');
 
@@ -917,10 +990,15 @@
     absentBtn.classList.toggle('active', record.attendance === 'absent');
 
     const hwInput = card.querySelector('[data-field="homeworkGrade"]');
+    const hwMaxInput = card.querySelector('[data-field="homeworkMax"]');
     const examInput = card.querySelector('[data-field="examGrade"]');
+    const examMaxInput = card.querySelector('[data-field="examMax"]');
     const notesInput = card.querySelector('[data-field="notes"]');
+
     if (record.homeworkGrade != null) hwInput.value = record.homeworkGrade;
+    if (record.homeworkMax != null) hwMaxInput.value = record.homeworkMax;
     if (record.examGrade != null) examInput.value = record.examGrade;
+    if (record.examMax != null) examMaxInput.value = record.examMax;
     if (record.notes) notesInput.value = record.notes;
   }
 
@@ -946,6 +1024,11 @@
     }
   }
 
+  /**
+   * Feature 2 + Feature 6: captures homeworkMax/examMax alongside the raw
+   * grades, and always stamps secretaryName/secretaryId on the record so
+   * there is a clear audit trail of who logged the attendance/grades.
+   */
   async function saveStudentCard(card, studentId) {
     const student = state.students.find((s) => String(s.id) === String(studentId));
     if (!student) return;
@@ -962,7 +1045,9 @@
     }
 
     const homeworkGrade = card.querySelector('[data-field="homeworkGrade"]').value;
+    const homeworkMax = card.querySelector('[data-field="homeworkMax"]').value;
     const examGrade = card.querySelector('[data-field="examGrade"]').value;
+    const examMax = card.querySelector('[data-field="examMax"]').value;
     const notes = card.querySelector('[data-field="notes"]').value.trim();
 
     const today = todayKey();
@@ -975,9 +1060,12 @@
       group: student.group,
       attendance,
       homeworkGrade: homeworkGrade === '' ? null : Number(homeworkGrade),
+      homeworkMax: homeworkMax === '' ? CONFIG.DEFAULT_HOMEWORK_MAX : Number(homeworkMax),
       examGrade: examGrade === '' ? null : Number(examGrade),
+      examMax: examMax === '' ? CONFIG.DEFAULT_EXAM_MAX : Number(examMax),
       notes,
       status: 'pending',
+      // --- Audit trail (Feature 6): who logged this record ---
       secretaryName: state.currentUser.name,
       secretaryId: state.currentUser.id,
       dateKey: today,
@@ -1015,7 +1103,7 @@
   }
 
   /* =====================================================================
-     ADD NEW STUDENT (Offline-First)
+     ADD NEW STUDENT (Offline-First) — Feature 5
      ===================================================================== */
 
   function populateSelect(selectEl, options, placeholder) {
@@ -1048,6 +1136,23 @@
     els.addStudentModal.setAttribute('aria-hidden', 'true');
   }
 
+  /**
+   * Generates the next sequential 4-digit-and-up student ID by scanning
+   * every existing numeric ID (local + previously synced) and adding 1,
+   * starting from CONFIG.STUDENT_ID_START (1000) if the roster is empty
+   * or has no purely-numeric IDs yet.
+   */
+  function generateNextStudentId() {
+    let maxId = CONFIG.STUDENT_ID_START - 1;
+    state.students.forEach((s) => {
+      const numId = parseInt(s.id, 10);
+      if (!isNaN(numId) && String(numId) === String(s.id).trim() && numId > maxId) {
+        maxId = numId;
+      }
+    });
+    return String(maxId + 1);
+  }
+
   async function saveNewStudent() {
     const name = els.newStudentName.value.trim();
     const phone = els.newStudentPhone.value.trim();
@@ -1056,22 +1161,30 @@
     const day = els.newStudentDay.value;
     const time = els.newStudentTime.value;
 
+    // --- Strict validation (Feature 5) ---
     if (!name) {
-      showToast('من فضلك اكتب اسم الطالب', 'error');
+      showToast('⚠️ من فضلك اكتب اسم الطالب', 'error');
       els.newStudentName.focus();
       return;
     }
     if (!year || !branch || !day || !time) {
-      showToast('من فضلك اختر جميع بيانات المجموعة (الصف/الفرع/اليوم/الموعد)', 'error');
+      showToast('⚠️ عذرًا، يجب اختيار جميع بيانات المجموعة (الصف / الفرع / اليوم / الموعد)', 'error');
+      return;
+    }
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (phoneDigits.length < 11) {
+      showToast('⚠️ رقم هاتف ولي الأمر غير صحيح — يجب ألا يقل عن 11 رقمًا', 'error');
+      els.newStudentPhone.focus();
       return;
     }
 
     const group = buildGroupLabel(year, branch);
+    const nextId = generateNextStudentId();
 
     const newStudent = {
-      id: uid('NEW'),
+      id: nextId,
       name,
-      phone: phone || null,
+      phone: phoneDigits,
       year,
       branch,
       day,
@@ -1089,11 +1202,83 @@
     buildGroupChips();
     renderStudentsList();
 
-    showToast(`تم إضافة ${name} محليًا، يمكنك تسجيل حضوره الآن`, 'success');
+    // Immediately surface the exact new ID to the secretary (Feature 5).
+    showToast(`✅ تم الحفظ! كود الطالب الجديد هو: [ ${nextId} ]`, 'success');
     vibrate([20, 30, 20]);
 
-    // Try to push immediately if online; otherwise it queues for later.
     if (navigator.onLine) triggerSync();
+  }
+
+  /* =====================================================================
+     FEATURE 3 — EXPORT TODAY'S REPORT TO EXCEL / CSV
+     ===================================================================== */
+
+  function csvEscape(value) {
+    const str = value == null ? '' : String(value);
+    if (/[",\n]/.test(str)) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  }
+
+  function exportTodayToExcel() {
+    const today = todayKey();
+    const todayRecords = state.records.filter((r) => r.dateKey === today);
+
+    if (todayRecords.length === 0) {
+      showToast('لا توجد أي سجلات محفوظة لليوم لتصديرها', 'error');
+      return;
+    }
+
+    const headers = [
+      'كود الطالب', 'اسم الطالب', 'المجموعة', 'الحضور',
+      'درجة الواجب', 'من (واجب)', 'درجة الامتحان', 'من (امتحان)',
+      'ملاحظات', 'سجّلها', 'اعتمدها', 'الحالة', 'التاريخ',
+    ];
+
+    const rows = todayRecords.map((r) => [
+      r.studentId,
+      r.studentName,
+      r.group,
+      r.attendance === 'present' ? 'حاضر' : r.attendance === 'absent' ? 'غائب' : '—',
+      r.homeworkGrade != null ? r.homeworkGrade : '',
+      r.homeworkMax != null ? r.homeworkMax : '',
+      r.examGrade != null ? r.examGrade : '',
+      r.examMax != null ? r.examMax : '',
+      r.notes || '',
+      r.secretaryName || '',
+      r.approvedBy || '',
+      translateStatus(r.status),
+      r.dateKey,
+    ]);
+
+    // \uFEFF (UTF-8 BOM) ensures Excel renders Arabic text correctly
+    // instead of showing garbled characters when the CSV is opened.
+    const csvContent = '\uFEFF' +
+      headers.map(csvEscape).join(',') + '\r\n' +
+      rows.map((row) => row.map(csvEscape).join(',')).join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `report_${today}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast(`تم تصدير ${todayRecords.length} سجل بنجاح`, 'success');
+  }
+
+  function translateStatus(status) {
+    switch (status) {
+      case 'pending': return 'بانتظار الاعتماد';
+      case 'approved': return 'معتمد (بانتظار الإرسال)';
+      case 'synced': return 'معتمد ومُرسَل';
+      case 'failed': return 'فشلت المزامنة';
+      default: return status || '—';
+    }
   }
 
   /* =====================================================================
@@ -1137,6 +1322,11 @@
     els.approvalsList.appendChild(frag);
   }
 
+  /**
+   * Feature 2: displays grades as "15 / 20" instead of a bare number,
+   * falling back to the configured default max if a record predates
+   * this feature and has no stored max value.
+   */
   function buildApprovalCard(record) {
     const node = els.approvalCardTemplate.content.cloneNode(true);
     const card = node.querySelector('.approval-card');
@@ -1159,10 +1349,13 @@
       attendancePill.textContent = '— لم يُسجَّل';
     }
 
+    const hwMax = record.homeworkMax != null ? record.homeworkMax : CONFIG.DEFAULT_HOMEWORK_MAX;
+    const examMax = record.examMax != null ? record.examMax : CONFIG.DEFAULT_EXAM_MAX;
+
     node.querySelector('[data-role="homeworkPill"]').textContent =
-      `واجب: ${record.homeworkGrade != null ? record.homeworkGrade : '—'}`;
+      record.homeworkGrade != null ? `واجب: ${record.homeworkGrade} / ${hwMax}` : 'واجب: —';
     node.querySelector('[data-role="examPill"]').textContent =
-      `امتحان: ${record.examGrade != null ? record.examGrade : '—'}`;
+      record.examGrade != null ? `امتحان: ${record.examGrade} / ${examMax}` : 'امتحان: —';
 
     const notesEl = node.querySelector('[data-role="notesText"]');
     notesEl.textContent = record.notes || '';
@@ -1200,6 +1393,11 @@
     }
   }
 
+  /**
+   * Feature 6: stamps `approvedBy` with the master's name at the exact
+   * moment of approval, completing the audit trail (who logged it, who
+   * approved it). This value travels to the API via pushRecordToApi().
+   */
   async function approveRecord(recordId) {
     const record = await db.getRecord(recordId);
     if (!record) return;
@@ -1240,7 +1438,7 @@
   }
 
   /* =====================================================================
-     EDIT MODAL (used from both master approvals queue)
+     EDIT MODAL (used from the master approvals queue)
      ===================================================================== */
 
   async function openEditModal(recordId) {
@@ -1254,7 +1452,9 @@
     els.editAbsentBtn.classList.toggle('active', record.attendance === 'absent');
 
     els.editHomeworkGrade.value = record.homeworkGrade != null ? record.homeworkGrade : '';
+    els.editHomeworkMax.value = record.homeworkMax != null ? record.homeworkMax : CONFIG.DEFAULT_HOMEWORK_MAX;
     els.editExamGrade.value = record.examGrade != null ? record.examGrade : '';
+    els.editExamMax.value = record.examMax != null ? record.examMax : CONFIG.DEFAULT_EXAM_MAX;
     els.editNotes.value = record.notes || '';
 
     els.editModal.classList.remove('hidden');
@@ -1284,14 +1484,18 @@
         : record.attendance;
 
     const homeworkGrade = els.editHomeworkGrade.value;
+    const homeworkMax = els.editHomeworkMax.value;
     const examGrade = els.editExamGrade.value;
+    const examMax = els.editExamMax.value;
     const notes = els.editNotes.value.trim();
 
     const updated = {
       ...record,
       attendance,
       homeworkGrade: homeworkGrade === '' ? null : Number(homeworkGrade),
+      homeworkMax: homeworkMax === '' ? CONFIG.DEFAULT_HOMEWORK_MAX : Number(homeworkMax),
       examGrade: examGrade === '' ? null : Number(examGrade),
+      examMax: examMax === '' ? CONFIG.DEFAULT_EXAM_MAX : Number(examMax),
       notes,
       status: 'pending', // edits reset to pending for re-approval
       updatedAt: Date.now(),
@@ -1322,7 +1526,7 @@
   }
 
   /* =====================================================================
-     MANAGE SECRETARIES (Master only) — RBAC administration
+     MANAGE SECRETARIES (Master only) — RBAC administration + accounts
      ===================================================================== */
 
   async function openManageSecretariesModal() {
@@ -1340,9 +1544,9 @@
   function renderSecretariesList() {
     els.secretariesList.innerHTML = '';
 
-    // Master usually doesn't need to manage other masters — but show
-    // everyone except the currently logged-in master account for clarity.
-    const list = state.secretaries.filter((s) => s.role !== 'master');
+    // Show everyone (master accounts included) so the master can manage
+    // every account from one place, including other master accounts.
+    const list = state.secretaries;
 
     if (list.length === 0) {
       els.noSecretaries.classList.remove('hidden');
@@ -1364,11 +1568,13 @@
 
     node.querySelector('.student-avatar').textContent = initials(secretary.name);
     node.querySelector('[data-role="secName"]').textContent = secretary.name;
-    node.querySelector('[data-role="secRole"]').textContent = 'سكرتارية';
+    node.querySelector('[data-role="secRole"]').textContent = secretary.role === 'master' ? 'مدير المركز' : 'سكرتارية';
 
     const groupsCount = Array.isArray(secretary.allowedGroups) ? secretary.allowedGroups.length : 0;
     node.querySelector('[data-role="secGroupsCount"]').textContent =
-      groupsCount === 0 ? 'كل المجموعات' : `${groupsCount} مجموعة مسموحة`;
+      secretary.role === 'master'
+        ? 'صلاحية كاملة'
+        : (groupsCount === 0 ? 'كل المجموعات' : `${groupsCount} مجموعة مسموحة`);
 
     const syncBadge = node.querySelector('[data-role="secSyncBadge"]');
     if (secretary.pendingSync) {
@@ -1376,6 +1582,12 @@
       syncBadge.classList.add('pending');
     } else {
       syncBadge.textContent = '✅ متزامن';
+    }
+
+    // Group-permissions editing only makes sense for secretary accounts.
+    const permsBtn = node.querySelector('[data-action="edit-perms"]');
+    if (secretary.role === 'master') {
+      permsBtn.remove();
     }
 
     return node;
@@ -1388,6 +1600,8 @@
 
     if (e.target.closest('[data-action="edit-perms"]')) {
       openSecretaryPermsModal(secretaryId);
+    } else if (e.target.closest('[data-action="edit-account"]')) {
+      openSecretaryFormModal(secretaryId);
     }
   }
 
@@ -1451,7 +1665,6 @@
     const item = e.target.closest('.group-check-item');
     if (!item) return;
 
-    // Let the native checkbox toggle happen, then sync the visual state.
     const checkbox = item.querySelector('input[type="checkbox"]');
     if (e.target !== checkbox) {
       checkbox.checked = !checkbox.checked;
@@ -1480,6 +1693,109 @@
     closeSecretaryPermsModal();
     renderSecretariesList();
     showToast(`تم تحديث صلاحيات ${secretary.name} وسيتم مزامنتها تلقائيًا`, 'success');
+
+    if (navigator.onLine) triggerSync();
+  }
+
+  /* =====================================================================
+     FEATURE 4 — ADD / EDIT SECRETARY ACCOUNTS
+     ===================================================================== */
+
+  /**
+   * Opens the account form modal. Passing `secretaryId` puts it in "edit"
+   * mode (pre-filled fields); passing null/undefined puts it in "add new
+   * account" mode with a blank form.
+   */
+  async function openSecretaryFormModal(secretaryId) {
+    state.editingSecretaryId = secretaryId || null;
+
+    if (secretaryId) {
+      const secretary = await db.getSecretaryById(secretaryId);
+      if (!secretary) return;
+      els.secretaryFormTitle.textContent = `تعديل حساب: ${secretary.name}`;
+      els.secretaryFormName.value = secretary.name || '';
+      els.secretaryFormPin.value = secretary.pin || '';
+      els.secretaryFormRole.value = secretary.role || 'secretary';
+    } else {
+      els.secretaryFormTitle.textContent = 'إضافة حساب جديد';
+      els.secretaryFormName.value = '';
+      els.secretaryFormPin.value = '';
+      els.secretaryFormRole.value = 'secretary';
+    }
+
+    els.secretaryFormModal.classList.remove('hidden');
+    els.secretaryFormModal.setAttribute('aria-hidden', 'false');
+    setTimeout(() => els.secretaryFormName.focus(), 100);
+  }
+
+  function closeSecretaryFormModal() {
+    state.editingSecretaryId = null;
+    els.secretaryFormModal.classList.add('hidden');
+    els.secretaryFormModal.setAttribute('aria-hidden', 'true');
+  }
+
+  /**
+   * Validates and saves a secretary account (new or edited) to IndexedDB
+   * with pendingSync:true, then immediately attempts to push it to the
+   * API via triggerSync() (type: 'secretary_update').
+   */
+  async function saveSecretaryForm() {
+    const name = els.secretaryFormName.value.trim();
+    const pin = els.secretaryFormPin.value.trim();
+    const role = els.secretaryFormRole.value;
+
+    if (!name) {
+      showToast('⚠️ من فضلك اكتب اسم صاحب الحساب', 'error');
+      els.secretaryFormName.focus();
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      showToast('⚠️ الرقم السري يجب أن يتكون من 4 أرقام بالضبط', 'error');
+      els.secretaryFormPin.focus();
+      return;
+    }
+
+    // Prevent duplicate PINs across different accounts.
+    state.secretaries = await db.getAllSecretaries();
+    const pinClash = state.secretaries.find((s) =>
+      String(s.pin) === pin && s.id !== state.editingSecretaryId
+    );
+    if (pinClash) {
+      showToast(`⚠️ هذا الرقم السري مستخدم بالفعل مع حساب "${pinClash.name}"`, 'error');
+      return;
+    }
+
+    let secretary;
+    if (state.editingSecretaryId) {
+      const existing = await db.getSecretaryById(state.editingSecretaryId);
+      secretary = {
+        ...existing,
+        name,
+        pin,
+        role,
+        pendingSync: true,
+        updatedAt: Date.now(),
+      };
+    } else {
+      secretary = {
+        id: uid('sec'),
+        name,
+        pin,
+        role,
+        allowedGroups: [],
+        pendingSync: true,
+        createdAt: Date.now(),
+        createdBy: state.currentUser ? state.currentUser.name : null,
+      };
+    }
+
+    await db.upsertSecretary(secretary);
+    state.secretaries = await db.getAllSecretaries();
+
+    closeSecretaryFormModal();
+    renderSecretariesList();
+    showToast(`تم حفظ حساب ${secretary.name} وسيتم مزامنته تلقائيًا`, 'success');
+    vibrate([20, 30, 20]);
 
     if (navigator.onLine) triggerSync();
   }

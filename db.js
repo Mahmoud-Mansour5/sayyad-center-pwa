@@ -17,8 +17,10 @@
  *   - "secretaries" store: role-based accounts (id, name, pin, role,
  *                   allowedGroups) fetched from the API and cached.
  *                   Login authenticates against this store. Any local
- *                   edits (e.g. master updating allowedGroups) are
- *                   flagged with pendingSync:true for the sync engine.
+ *                   edits (e.g. master updating allowedGroups, or adding
+ *                   a new account) are flagged with pendingSync:true for
+ *                   the sync engine.
+ *   - "meta"        store: small key/value operational data (last sync).
  *
  * Falls back to an in-memory + localStorage shim automatically if
  * IndexedDB is unavailable (e.g. private browsing edge cases), so the
@@ -409,6 +411,21 @@ class SayyadDB {
       const store = this._tx(STORE_SECRETARIES, 'readwrite');
       const req = store.put(secretary);
       req.onsuccess = () => resolve(secretary);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async deleteSecretary(secretaryId) {
+    await this.init();
+    if (this._useFallback) {
+      this._fallbackData.secretaries = this._fallbackData.secretaries.filter((s) => s.id !== secretaryId);
+      this._persistFallback();
+      return true;
+    }
+    return new Promise((resolve, reject) => {
+      const store = this._tx(STORE_SECRETARIES, 'readwrite');
+      const req = store.delete(secretaryId);
+      req.onsuccess = () => resolve(true);
       req.onerror = () => reject(req.error);
     });
   }

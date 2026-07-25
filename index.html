@@ -72,7 +72,6 @@
       <button class="pin-key pin-key-action" id="pinBackspace">⌫</button>
     </div>
 
-    <p class="login-hint muted">تلميح: السكرتارية 1234 &nbsp;|&nbsp; المدير 9999</p>
   </div>
 </div>
 
@@ -94,6 +93,7 @@
           <span class="sync-dot"></span>
           <span id="syncBadgeText">متصل</span>
         </span>
+        <button id="themeToggleBtn" class="icon-btn" title="تبديل الوضع الليلي/النهاري" aria-label="تبديل الوضع الليلي/النهاري">🌓</button>
         <button id="addStudentBtn" class="icon-btn hidden" title="إضافة طالب جديد" aria-label="إضافة طالب جديد">➕</button>
         <button id="manageSecretariesBtn" class="icon-btn hidden" title="إدارة السكرتارية" aria-label="إدارة السكرتارية">⚙️</button>
         <button id="logoutBtn" class="icon-btn" title="تسجيل الخروج" aria-label="تسجيل الخروج">🚪</button>
@@ -172,7 +172,10 @@
     <section class="approvals-section">
       <div class="section-header">
         <h2>طابور اعتماد السجلات</h2>
-        <button id="approveAllBtn" class="btn btn-small btn-ghost">اعتماد الكل</button>
+        <div class="section-header-actions">
+          <button id="exportExcelBtn" class="btn btn-small btn-ghost">📊 تصدير Excel</button>
+          <button id="approveAllBtn" class="btn btn-small btn-ghost">اعتماد الكل</button>
+        </div>
       </div>
       <div id="approvalsList" class="approvals-list"></div>
       <div id="noApprovals" class="empty-state hidden">
@@ -214,11 +217,19 @@
       <div class="form-row">
         <div class="form-group">
           <label>درجة الواجب</label>
-          <input type="number" class="input-field" data-field="homeworkGrade" min="0" max="100" placeholder="0-100" inputmode="numeric">
+          <div class="grade-pair">
+            <input type="number" class="input-field" data-field="homeworkGrade" min="0" placeholder="الدرجة" inputmode="numeric">
+            <span class="grade-sep">/</span>
+            <input type="number" class="input-field grade-max-field" data-field="homeworkMax" min="1" placeholder="من" value="20" inputmode="numeric">
+          </div>
         </div>
         <div class="form-group">
           <label>درجة الامتحان</label>
-          <input type="number" class="input-field" data-field="examGrade" min="0" max="100" placeholder="0-100" inputmode="numeric">
+          <div class="grade-pair">
+            <input type="number" class="input-field" data-field="examGrade" min="0" placeholder="الدرجة" inputmode="numeric">
+            <span class="grade-sep">/</span>
+            <input type="number" class="input-field grade-max-field" data-field="examMax" min="1" placeholder="من" value="20" inputmode="numeric">
+          </div>
         </div>
       </div>
       <div class="form-group">
@@ -293,11 +304,19 @@
       <div class="form-row">
         <div class="form-group">
           <label>درجة الواجب</label>
-          <input type="number" class="input-field" id="editHomeworkGrade" min="0" max="100" inputmode="numeric">
+          <div class="grade-pair">
+            <input type="number" class="input-field" id="editHomeworkGrade" min="0" inputmode="numeric">
+            <span class="grade-sep">/</span>
+            <input type="number" class="input-field grade-max-field" id="editHomeworkMax" min="1" inputmode="numeric">
+          </div>
         </div>
         <div class="form-group">
           <label>درجة الامتحان</label>
-          <input type="number" class="input-field" id="editExamGrade" min="0" max="100" inputmode="numeric">
+          <div class="grade-pair">
+            <input type="number" class="input-field" id="editExamGrade" min="0" inputmode="numeric">
+            <span class="grade-sep">/</span>
+            <input type="number" class="input-field grade-max-field" id="editExamMax" min="1" inputmode="numeric">
+          </div>
         </div>
       </div>
       <div class="form-group">
@@ -387,11 +406,43 @@
       <button class="modal-close" id="manageSecretariesModalClose" aria-label="إغلاق">✕</button>
     </div>
     <div class="modal-body">
+      <button id="addSecretaryBtn" class="btn btn-primary" style="margin-bottom:14px;">➕ إضافة حساب جديد</button>
       <div id="secretariesList" class="secretaries-list"></div>
       <div id="noSecretaries" class="empty-state hidden">
         <span class="empty-emoji">👤</span>
         <p>لا يوجد سكرتارية مسجلين محليًا بعد</p>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ADD / EDIT SECRETARY ACCOUNT FORM MODAL ============ -->
+<div id="secretaryFormModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box edit-box">
+    <div class="modal-header">
+      <h2 id="secretaryFormTitle">إضافة حساب جديد</h2>
+      <button class="modal-close" id="secretaryFormModalClose" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>اسم صاحب الحساب</label>
+        <input type="text" class="input-field" id="secretaryFormName" placeholder="اكتب الاسم بالكامل" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>الرقم السري (4 أرقام)</label>
+        <input type="text" class="input-field" id="secretaryFormPin" placeholder="مثال: 1234" inputmode="numeric" maxlength="4" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>الدور</label>
+        <select class="input-field select-field" id="secretaryFormRole">
+          <option value="secretary">سكرتارية</option>
+          <option value="master">مدير المركز</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="cancelSecretaryFormBtn">إلغاء</button>
+      <button class="btn btn-primary" id="saveSecretaryFormBtn">💾 حفظ الحساب</button>
     </div>
   </div>
 </div>
@@ -432,7 +483,10 @@
       </div>
       <span class="sync-mini-badge" data-role="secSyncBadge"></span>
     </div>
-    <button class="btn btn-ghost btn-small" data-action="edit-perms">🏷️ تعديل المجموعات المسموحة</button>
+    <div class="secretary-card-actions">
+      <button class="btn btn-ghost btn-small" data-action="edit-perms">🏷️ المجموعات المسموحة</button>
+      <button class="btn btn-ghost btn-small" data-action="edit-account">✏️ تعديل الحساب</button>
+    </div>
   </article>
 </template>
 

@@ -6,8 +6,8 @@
   /* Brand palette */
   --bg-deep: #0b1220;
   --bg-app: #f3f5fb;
-  --bg-card: #ffffff;
-  --bg-card-alt: #f8f9fd;
+  --bg-card: #0f172a;;
+  --bg-card-alt: #1e293b;
 
   --primary: #4f6df5;
   --primary-dark: #3a52d1;
@@ -32,7 +32,7 @@
   --text-muted: #9098ab;
   --text-inverse: #ffffff;
 
-  --border-color: #e7e9f3;
+  --border-color: #334155;
   --border-strong: #d5d9ea;
 
   --radius-sm: 10px;
@@ -258,14 +258,17 @@ input, textarea {
   margin-top: 18px;
 }
 .pin-key {
-  aspect-ratio: 1;
-  border-radius: 50%;
+  min-height: 75px; 
+  border-radius: 18px; /* حواف مربعة ناعمة */
   background: var(--bg-card-alt);
-  font-size: 20px;
-  font-weight: 700;
-  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  font-weight: 800;
+  display: flex; 
+  align-items: center; 
+  justify-content: center;
   transition: transform 0.12s ease, background 0.15s ease;
   border: 1px solid var(--border-color);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15); /* إضافة ظل خفيف */
 }
 .pin-key:active { transform: scale(0.9); background: var(--primary-light); }
 .pin-key-action { font-size: 13px; background: transparent; border-color: transparent; color: var(--text-secondary); }
@@ -600,7 +603,7 @@ input, textarea {
 }
 .input-field:focus {
   border-color: var(--primary);
-  background: #fff;
+  background: var(--bg-card);
   box-shadow: 0 0 0 3px var(--primary-glow);
 }
 .textarea-field { resize: vertical; min-height: 46px; font-weight: 500; line-height: 1.5; }
@@ -923,4 +926,172 @@ input, textarea {
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 700;
+}
+
+/* =========================================================
+   GRADE PAIR (actual / max grade side-by-side inputs)
+   ========================================================= */
+.grade-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.grade-pair .input-field { min-width: 0; flex: 1; }
+.grade-max-field {
+  flex: 0 0 58px !important;
+  text-align: center;
+  background: var(--bg-card-alt);
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+.grade-sep {
+  font-weight: 800;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* =========================================================
+   SECTION HEADER ACTIONS (Master dashboard toolbar)
+   ========================================================= */
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* =========================================================
+   SECRETARY CARD ACTIONS (Manage Secretaries modal)
+   ========================================================= */
+.secretary-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* =========================================================
+   THEME TOGGLE
+   ========================================================= */
+#themeToggleBtn { font-size: 17px; }
+
+/* =========================================================================
+   DARK / LIGHT MODE SYSTEM
+   ---------------------------------------------------------------------
+   Default (no class on <body>) = Dark Mode.
+   Adding `.light-theme` to <body> switches every CSS variable below to
+   the light palette. All existing components already consume these
+   variables (--bg-app, --bg-card, --text-primary, etc.) so the whole
+   UI repaints automatically with zero per-component overrides needed.
+   ========================================================================= */
+
+body {
+  /* Dark mode is the default palette */
+  --bg-deep: #05070d;
+  --bg-app: #0b1220;
+  --bg-card: #131b2e;
+  --bg-card-alt: #1a2338;
+
+  --primary: #6c86ff;
+  --primary-dark: #4f6df5;
+  --primary-light: rgba(108, 134, 255, 0.16);
+  --primary-glow: rgba(108, 134, 255, 0.35);
+
+  --accent-purple: #a78bfa;
+  --accent-orange: #fbbf24;
+  --accent-green: #34d399;
+  --accent-red: #f87171;
+  --accent-teal: #22d3ee;
+
+  --success: #34d399;
+  --success-light: rgba(52, 211, 153, 0.14);
+  --danger: #f87171;
+  --danger-light: rgba(248, 113, 113, 0.14);
+  --warning: #fbbf24;
+  --warning-light: rgba(251, 191, 36, 0.14);
+
+  --text-primary: #eef1fb;
+  --text-secondary: #a4adc4;
+  --text-muted: #6b7590;
+  --text-inverse: #0b1220;
+
+  --border-color: #232d47;
+  --border-strong: #2e3a5c;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 8px 28px var(--primary-glow);
+
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+body.light-theme {
+  --bg-deep: #0b1220;
+  --bg-app: #f3f5fb;
+  --bg-card: #ffffff;
+  --bg-card-alt: #f8f9fd;
+
+  --primary: #4f6df5;
+  --primary-dark: #3a52d1;
+  --primary-light: #eaefff;
+  --primary-glow: rgba(79, 109, 245, 0.35);
+
+  --accent-purple: #8b5cf6;
+  --accent-orange: #f59e0b;
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+  --accent-teal: #06b6d4;
+
+  --success: #10b981;
+  --success-light: #e7f9f2;
+  --danger: #ef4444;
+  --danger-light: #fdecec;
+  --warning: #f59e0b;
+  --warning-light: #fef6e7;
+
+  --text-primary: #131a2b;
+  --text-secondary: #5c6478;
+  --text-muted: #9098ab;
+  --text-inverse: #ffffff;
+
+  --border-color: #e7e9f3;
+  --border-strong: #d5d9ea;
+
+  --shadow-sm: 0 2px 8px rgba(20, 25, 50, 0.06);
+  --shadow-md: 0 8px 24px rgba(20, 25, 50, 0.08);
+  --shadow-lg: 0 16px 40px rgba(20, 25, 50, 0.12);
+  --shadow-glow: 0 8px 28px var(--primary-glow);
+}
+
+/* The dark, near-black header/splash gradient stays legible on both
+   themes since it always uses fixed hex values, not variables — but we
+   soften it slightly in light mode so it doesn't feel disconnected. */
+body.light-theme .app-header,
+body.light-theme .splash-screen {
+  background: linear-gradient(135deg, #14213f 0%, #0b1220 100%);
+}
+
+/* Dark mode: cards/inputs need a touch more contrast on borders since
+   there's no natural drop-shadow separation against a near-black page. */
+body:not(.light-theme) .modal-overlay { background: rgba(0, 0, 0, 0.6); }
+body:not(.light-theme) .input-field,
+body:not(.light-theme) .select-field {
+  background: var(--bg-card-alt);
+  border: 1px solid var(--border-color);
+}
+body:not(.light-theme) .select-field {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23a4adc4' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+}
+body:not(.light-theme) .toast { color: #fff; }
+/* =========================================
+   خلفية الفضاء (النجوم) في الدارك مود
+   ========================================= */
+body:not(.light-theme) {
+  background-color: #080c16 !important;
+  background-image: 
+    radial-gradient(white, rgba(255,255,255,.15) 2px, transparent 3px),
+    radial-gradient(white, rgba(255,255,255,.1) 1px, transparent 2px) !important;
+  background-size: 400px 400px, 250px 250px !important;
+  background-position: 0 0, 150px 150px !important;
+  background-attachment: fixed !important;
 }
