@@ -3,11 +3,14 @@
  * -------------------------------------------------------------
  * Core application logic for مركز الأستاذ محمود الصياد للتطوير التعليمي
  *
- *  - PIN authentication (role-based: secretary / master)
+ *  - PIN authentication against secretaries cached in IndexedDB
+ *  - Dynamic data: students / settings / secretaries fetched from API
  *  - Secretary view: search, quick attendance, grades/notes, offline save
- *  - Master view: stats + combined pending-approvals queue
+ *  - Add-Student (offline-first, pending_creation flow)
+ *  - Role-Based Access Control: secretaries only see their allowedGroups
+ *  - Master view: stats + combined pending-approvals queue + secretary mgmt
  *  - Offline-first queue in IndexedDB (via db.js)
- *  - Auto background sync to a Google Apps Script endpoint when online
+ *  - Auto background sync to an API endpoint when online
  * -------------------------------------------------------------
  */
 
@@ -19,52 +22,41 @@
      ===================================================================== */
 
   const CONFIG = {
-    // Replace with your deployed Google Apps Script Web App URL.
-    API_ENDPOINT: 'https://script.google.com/macros/s/REPLACE_WITH_YOUR_DEPLOYMENT_ID/exec',
+    // Replace with your real backend endpoint (REST API / Apps Script / etc).
+    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbwrBXqCM3POhflij36kfPMLMi22CV9U1lUywb0Kv_ADWssxvNWW-YPEw7-UzC54Jyiz/exec',
 
     PIN_LENGTH: 4,
-
-    // PIN -> user profile map. In production, consider hashing these
-    // and/or fetching from a remote config once online.
-    USERS: {
-      '1234': { role: 'secretary', name: 'سكرتارية الاستقبال', id: 'sec-1' },
-      '1111': { role: 'secretary', name: 'سكرتارية الفرع الثاني', id: 'sec-2' },
-      '9999': { role: 'master', name: 'الأستاذ محمود الصياد', id: 'master-1' },
-    },
 
     SYNC_RETRY_INTERVAL_MS: 30000,
     TOAST_DURATION_MS: 3200,
   };
 
-  // Seed roster used the first time the app runs (offline-ready demo data).
-  const SEED_STUDENTS = [
-    { id: '501', name: 'أحمد محمد السيد', group: 'الصف الأول الثانوي - أ' },
-    { id: '502', name: 'مريم علي حسن', group: 'الصف الأول الثانوي - أ' },
-    { id: '503', name: 'يوسف كريم عبد الله', group: 'الصف الأول الثانوي - ب' },
-    { id: '504', name: 'سارة إبراهيم فتحي', group: 'الصف الأول الثانوي - ب' },
-    { id: '505', name: 'محمود جمال الصياد', group: 'الصف الثاني الثانوي - أ' },
-    { id: '506', name: 'نور الدين حسام', group: 'الصف الثاني الثانوي - أ' },
-    { id: '507', name: 'ياسمين طارق سعيد', group: 'الصف الثاني الثانوي - ب' },
-    { id: '508', name: 'عمر خالد منصور', group: 'الصف الثاني الثانوي - ب' },
-    { id: '509', name: 'هنا وليد عادل', group: 'الصف الثالث الثانوي - أ' },
-    { id: '510', name: 'كريم عصام فؤاد', group: 'الصف الثالث الثانوي - أ' },
-    { id: '511', name: 'ملك رامي شوقي', group: 'الصف الثالث الثانوي - ب' },
-    { id: '512', name: 'زياد أشرف نبيل', group: 'الصف الثالث الثانوي - ب' },
-  ];
+  // Local fallback lists used only if the settings store has nothing
+  // cached yet (e.g. very first offline install with no prior sync).
+  const FALLBACK_SETTINGS = {
+    branches: ['الفرع الرئيسي'],
+    years: ['الصف الأول الثانوي', 'الصف الثاني الثانوي', 'الصف الثالث الثانوي'],
+    days: ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'],
+    times: ['04:00 م', '06:00 م', '08:00 م'],
+  };
 
   /* =====================================================================
      STATE
      ===================================================================== */
 
   const state = {
-    currentUser: null, // { role, name, id }
+    currentUser: null,   // secretary/master profile loaded from IndexedDB
     students: [],
-    records: [],       // all local records (pending + approved cache)
+    records: [],         // all local records (pending + approved cache)
+    settings: {},         // { branches:[], years:[], days:[], times:[] }
+    secretaries: [],
     searchQuery: '',
     activeGroup: 'all',
     isSyncing: false,
+    isFetchingInitialData: false,
     editingRecordId: null,
     pendingConfirmAction: null,
+    activeSecretaryIdForPerms: null,
   };
 
   /* =====================================================================
@@ -129,6 +121,12 @@
     }
   }
 
+  function buildGroupLabel(year, branch) {
+    if (!year && !branch) return '';
+    if (year && branch) return `${year} - ${branch}`;
+    return year || branch;
+  }
+
   /* =====================================================================
      INIT
      ===================================================================== */
@@ -139,21 +137,28 @@
     registerServiceWorker();
 
     await db.init();
-    await db.seedStudentsIfEmpty(SEED_STUDENTS);
 
     state.students = await db.getAllStudents();
     state.records = await db.getAllRecords();
+    state.settings = await db.getAllSettings();
+    state.secretaries = await db.getAllSecretaries();
 
     setupConnectivityWatchers();
     hideSplash();
 
+    // If we're online and local caches look empty (first run), fetch now.
+    if (navigator.onLine && (state.students.length === 0 || state.secretaries.length === 0)) {
+      await fetchInitialData();
+    }
+
     // Try to restore a previous session (role only, not sensitive).
-    const savedUser = sessionStorage.getItem('sayyad_session_user');
-    if (savedUser) {
-      try {
-        state.currentUser = JSON.parse(savedUser);
+    const savedUserId = sessionStorage.getItem('sayyad_session_user_id');
+    if (savedUserId) {
+      const restored = await db.getSecretaryById(savedUserId);
+      if (restored) {
+        state.currentUser = restored;
         enterApp();
-      } catch (_) {
+      } else {
         showLogin();
       }
     } else {
@@ -173,6 +178,8 @@
     els.syncBadge = $('#syncBadge');
     els.syncBadgeText = $('#syncBadgeText');
     els.logoutBtn = $('#logoutBtn');
+    els.addStudentBtn = $('#addStudentBtn');
+    els.manageSecretariesBtn = $('#manageSecretariesBtn');
     els.userRoleBadge = $('#userRoleBadge');
     els.userNameLabel = $('#userNameLabel');
 
@@ -197,6 +204,7 @@
 
     els.studentCardTemplate = $('#studentCardTemplate');
     els.approvalCardTemplate = $('#approvalCardTemplate');
+    els.secretaryCardTemplate = $('#secretaryCardTemplate');
 
     els.editModal = $('#editModal');
     els.editModalClose = $('#editModalClose');
@@ -215,6 +223,33 @@
     els.confirmCancelBtn = $('#confirmCancelBtn');
     els.confirmOkBtn = $('#confirmOkBtn');
 
+    // Add student modal
+    els.addStudentModal = $('#addStudentModal');
+    els.addStudentModalClose = $('#addStudentModalClose');
+    els.newStudentName = $('#newStudentName');
+    els.newStudentPhone = $('#newStudentPhone');
+    els.newStudentYear = $('#newStudentYear');
+    els.newStudentBranch = $('#newStudentBranch');
+    els.newStudentDay = $('#newStudentDay');
+    els.newStudentTime = $('#newStudentTime');
+    els.cancelAddStudentBtn = $('#cancelAddStudentBtn');
+    els.saveNewStudentBtn = $('#saveNewStudentBtn');
+
+    // Manage secretaries modal
+    els.manageSecretariesModal = $('#manageSecretariesModal');
+    els.manageSecretariesModalClose = $('#manageSecretariesModalClose');
+    els.secretariesList = $('#secretariesList');
+    els.noSecretaries = $('#noSecretaries');
+
+    // Secretary permissions modal
+    els.secretaryPermsModal = $('#secretaryPermsModal');
+    els.secretaryPermsModalClose = $('#secretaryPermsModalClose');
+    els.secretaryPermsName = $('#secretaryPermsName');
+    els.secretaryGroupsChecklist = $('#secretaryGroupsChecklist');
+    els.noGroupsForPerms = $('#noGroupsForPerms');
+    els.cancelSecretaryPermsBtn = $('#cancelSecretaryPermsBtn');
+    els.saveSecretaryPermsBtn = $('#saveSecretaryPermsBtn');
+
     els.toastContainer = $('#toastContainer');
   }
 
@@ -222,6 +257,80 @@
     setTimeout(() => {
       els.splashScreen.classList.add('fade-out');
     }, 450);
+  }
+
+  /* =====================================================================
+     API — INITIAL DATA FETCH
+     ===================================================================== */
+
+  /**
+   * Fetches students / settings / secretaries from CONFIG.API_ENDPOINT and
+   * caches everything in IndexedDB. Safe to call multiple times — it's the
+   * single source of truth refresh routine, called on load (if online) and
+   * can be re-triggered manually (e.g. pull-to-refresh) in the future.
+   *
+   * If no real endpoint is configured yet, it fails gracefully and the app
+   * keeps working from whatever is already cached locally (or empty state).
+   */
+  async function fetchInitialData() {
+    if (state.isFetchingInitialData) return;
+    if (!navigator.onLine) return;
+
+    state.isFetchingInitialData = true;
+    updateSyncBadge();
+
+    try {
+      if (!CONFIG.API_ENDPOINT || CONFIG.API_ENDPOINT.includes('REPLACE_WITH_YOUR_DEPLOYMENT_ID')) {
+        console.info('[Init] لا يوجد رابط API مضبوط — سيعمل التطبيق بالبيانات المخزنة محليًا فقط (إن وجدت).');
+        // Ensure settings has at least a usable fallback so dropdowns work.
+        if (!state.settings || Object.keys(state.settings).length === 0) {
+          for (const key of Object.keys(FALLBACK_SETTINGS)) {
+            await db.setSetting(key, FALLBACK_SETTINGS[key]);
+          }
+          state.settings = await db.getAllSettings();
+        }
+        return;
+      }
+
+      const res = await fetch(`${CONFIG.API_ENDPOINT}?action=bootstrap`, { method: 'GET' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      // Expected shape:
+      // { students: [{id,name,group,year,branch,day,time,phone}],
+      //   settings: { branches:[], years:[], days:[], times:[] },
+      //   secretaries: [{id,name,pin,role,allowedGroups:[]}] }
+
+      if (Array.isArray(data.students)) {
+        state.students = await db.replaceAllStudents(data.students);
+      }
+
+      if (data.settings && typeof data.settings === 'object') {
+        for (const key of Object.keys(data.settings)) {
+          await db.setSetting(key, data.settings[key]);
+        }
+        state.settings = await db.getAllSettings();
+      }
+
+      if (Array.isArray(data.secretaries)) {
+        state.secretaries = await db.replaceAllSecretaries(data.secretaries);
+      }
+
+      await db.setMeta('lastFetchAt', Date.now());
+      console.info('[Init] تم تحديث البيانات من الخادم بنجاح.');
+    } catch (err) {
+      console.warn('[Init] تعذّر جلب البيانات الأولية من الخادم.', err);
+      // Fall back to local settings so dropdowns aren't empty on first run.
+      if (!state.settings || Object.keys(state.settings).length === 0) {
+        for (const key of Object.keys(FALLBACK_SETTINGS)) {
+          await db.setSetting(key, FALLBACK_SETTINGS[key]);
+        }
+        state.settings = await db.getAllSettings();
+      }
+    } finally {
+      state.isFetchingInitialData = false;
+      updateSyncBadge();
+    }
   }
 
   /* =====================================================================
@@ -293,6 +402,8 @@
     });
 
     els.logoutBtn.addEventListener('click', handleLogout);
+    els.addStudentBtn.addEventListener('click', openAddStudentModal);
+    els.manageSecretariesBtn.addEventListener('click', openManageSecretariesModal);
 
     // Search
     els.studentSearch.addEventListener('input', (e) => {
@@ -345,10 +456,37 @@
       }
       closeConfirmModal();
     });
+
+    // Add student modal
+    els.addStudentModalClose.addEventListener('click', closeAddStudentModal);
+    els.cancelAddStudentBtn.addEventListener('click', closeAddStudentModal);
+    els.addStudentModal.addEventListener('click', (e) => {
+      if (e.target === els.addStudentModal) closeAddStudentModal();
+    });
+    els.saveNewStudentBtn.addEventListener('click', saveNewStudent);
+
+    // Manage secretaries modal
+    els.manageSecretariesModalClose.addEventListener('click', closeManageSecretariesModal);
+    els.manageSecretariesModal.addEventListener('click', (e) => {
+      if (e.target === els.manageSecretariesModal) closeManageSecretariesModal();
+    });
+    els.secretariesList.addEventListener('click', handleSecretariesListClick);
+
+    // Secretary permissions modal
+    els.secretaryPermsModalClose.addEventListener('click', closeSecretaryPermsModal);
+    els.cancelSecretaryPermsBtn.addEventListener('click', closeSecretaryPermsModal);
+    els.secretaryPermsModal.addEventListener('click', (e) => {
+      if (e.target === els.secretaryPermsModal) closeSecretaryPermsModal();
+    });
+    els.secretaryGroupsChecklist.addEventListener('click', handleGroupsChecklistClick);
+    els.saveSecretaryPermsBtn.addEventListener('click', saveSecretaryPerms);
   }
 
-  function attemptLogin(pin) {
-    const user = CONFIG.USERS[pin];
+  async function attemptLogin(pin) {
+    // Refresh from IndexedDB in case another session synced new accounts.
+    state.secretaries = await db.getAllSecretaries();
+    const user = await db.getSecretaryByPin(pin);
+
     if (!user) {
       els.pinError.classList.remove('hidden');
       els.pinDots.forEach((d) => d.classList.add('shake-error'));
@@ -363,7 +501,7 @@
     }
 
     state.currentUser = { ...user };
-    sessionStorage.setItem('sayyad_session_user', JSON.stringify(state.currentUser));
+    sessionStorage.setItem('sayyad_session_user_id', state.currentUser.id);
     els.pinError.classList.add('hidden');
     enterApp();
   }
@@ -374,7 +512,7 @@
       'هل تريد بالفعل تسجيل الخروج من النظام؟',
       () => {
         state.currentUser = null;
-        sessionStorage.removeItem('sayyad_session_user');
+        sessionStorage.removeItem('sayyad_session_user_id');
         els.app.classList.add('hidden');
         showLogin();
       }
@@ -392,16 +530,31 @@
     if (state.currentUser.role === 'master') {
       els.secretaryView.classList.add('hidden');
       els.masterView.classList.remove('hidden');
+      els.addStudentBtn.classList.add('hidden');
+      els.manageSecretariesBtn.classList.remove('hidden');
       renderMasterView();
     } else {
       els.masterView.classList.add('hidden');
       els.secretaryView.classList.remove('hidden');
+      els.addStudentBtn.classList.remove('hidden');
+      els.manageSecretariesBtn.classList.add('hidden');
       buildGroupChips();
       renderStudentsList();
       updatePendingBadgeSecretary();
     }
 
     updateSyncBadge();
+
+    // Kick off a background refresh so data stays current without
+    // blocking the UI the user is already looking at.
+    if (navigator.onLine) fetchInitialData().then(() => {
+      if (state.currentUser?.role === 'secretary') {
+        buildGroupChips();
+        renderStudentsList();
+      } else if (state.currentUser?.role === 'master') {
+        renderMasterView();
+      }
+    });
   }
 
   /* =====================================================================
@@ -427,7 +580,7 @@
 
   function updateSyncBadge() {
     els.syncBadge.classList.remove('online', 'offline', 'syncing');
-    if (state.isSyncing) {
+    if (state.isSyncing || state.isFetchingInitialData) {
       els.syncBadge.classList.add('syncing');
       els.syncBadgeText.textContent = 'جاري المزامنة';
     } else if (navigator.onLine) {
@@ -440,71 +593,108 @@
   }
 
   /**
-   * Push all "approved" (and any previously "failed") records to the
-   * Google Apps Script endpoint. Records that succeed are marked "synced".
+   * Pushes to the API, in order:
+   *   1. Students pending creation (offline-added students)
+   *   2. Secretaries pending sync (permission changes from master)
+   *   3. Approved / failed attendance records
    * This never blocks the UI — it runs silently in the background.
    */
   async function triggerSync() {
     if (state.isSyncing || !navigator.onLine) return;
 
-    const toSync = state.records.filter((r) => r.status === 'approved' || r.status === 'failed');
-    if (toSync.length === 0) return;
+    const pendingStudents = await db.getStudentsPendingCreation();
+    const pendingSecretaries = state.secretaries.filter((s) => s.pendingSync);
+    const toSyncRecords = state.records.filter((r) => r.status === 'approved' || r.status === 'failed');
+
+    if (pendingStudents.length === 0 && pendingSecretaries.length === 0 && toSyncRecords.length === 0) return;
 
     state.isSyncing = true;
     updateSyncBadge();
 
-    let successCount = 0;
-    let failCount = 0;
+    let studentSuccess = 0, studentFail = 0;
+    for (const student of pendingStudents) {
+      try {
+        const ok = await pushStudentToApi(student);
+        if (ok) {
+          const updated = { ...student, syncStatus: 'synced' };
+          await db.upsertStudent(updated);
+          studentSuccess++;
+        } else {
+          studentFail++;
+        }
+      } catch (err) {
+        studentFail++;
+      }
+    }
 
-    for (const record of toSync) {
+    let secSuccess = 0, secFail = 0;
+    for (const secretary of pendingSecretaries) {
+      try {
+        const ok = await pushSecretaryToApi(secretary);
+        if (ok) {
+          const updated = { ...secretary, pendingSync: false };
+          await db.upsertSecretary(updated);
+          secSuccess++;
+        } else {
+          secFail++;
+        }
+      } catch (err) {
+        secFail++;
+      }
+    }
+
+    let recSuccess = 0, recFail = 0;
+    for (const record of toSyncRecords) {
       try {
         const ok = await pushRecordToApi(record);
         if (ok) {
           record.status = 'synced';
           record.syncedAt = Date.now();
           await db.upsertRecord(record);
-          successCount++;
+          recSuccess++;
         } else {
           record.status = 'failed';
           await db.upsertRecord(record);
-          failCount++;
+          recFail++;
         }
       } catch (err) {
         record.status = 'failed';
         await db.upsertRecord(record);
-        failCount++;
+        recFail++;
       }
     }
 
+    state.students = await db.getAllStudents();
+    state.secretaries = await db.getAllSecretaries();
     state.records = await db.getAllRecords();
     state.isSyncing = false;
     updateSyncBadge();
 
-    if (successCount > 0) {
-      showToast(`تمت مزامنة ${successCount} سجل بنجاح`, 'success');
+    const totalSuccess = studentSuccess + secSuccess + recSuccess;
+    const totalFail = studentFail + secFail + recFail;
+
+    if (totalSuccess > 0) {
+      showToast(`تمت مزامنة ${totalSuccess} عنصر بنجاح`, 'success');
     }
-    if (failCount > 0) {
-      showToast(`تعذّرت مزامنة ${failCount} سجل، سيُعاد المحاولة تلقائيًا`, 'error');
+    if (totalFail > 0) {
+      showToast(`تعذّرت مزامنة ${totalFail} عنصر، سيُعاد المحاولة تلقائيًا`, 'error');
     }
 
     if (state.currentUser?.role === 'master') renderMasterView();
+    if (state.currentUser?.role === 'secretary') updatePendingBadgeSecretary();
   }
 
   async function pushRecordToApi(record) {
-    if (!CONFIG.API_ENDPOINT || CONFIG.API_ENDPOINT.includes('REPLACE_WITH_YOUR_DEPLOYMENT_ID')) {
-      // No real endpoint configured yet — treat as a successful "local-only"
-      // sync so the demo remains fully functional offline/without setup.
-      console.info('[Sync] لا يوجد رابط Google Apps Script مضبوط — تم تجاوز الإرسال الفعلي.', record);
+    if (!isApiConfigured()) {
+      console.info('[Sync] لا يوجد رابط API مضبوط — تم تجاوز الإرسال الفعلي (سجل).', record);
       return true;
     }
-
     try {
       const res = await fetch(CONFIG.API_ENDPOINT, {
         method: 'POST',
-        // Apps Script web apps generally expect text/plain to avoid
-        // CORS preflight issues; the script parses JSON from the body.
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
+          type: 'record',
           recordId: record.recordId,
           studentId: record.studentId,
           studentName: record.studentName,
@@ -525,6 +715,46 @@
       console.warn('[Sync] فشل إرسال السجل', record.recordId, err);
       return false;
     }
+  }
+
+  async function pushStudentToApi(student) {
+    if (!isApiConfigured()) {
+      console.info('[Sync] لا يوجد رابط API مضبوط — تم تجاوز الإرسال الفعلي (طالب جديد).', student);
+      return true;
+    }
+    try {
+      const res = await fetch(CONFIG.API_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ type: 'new_student', student }),
+      });
+      return res.ok;
+    } catch (err) {
+      console.warn('[Sync] فشل إرسال الطالب الجديد', student.id, err);
+      return false;
+    }
+  }
+
+  async function pushSecretaryToApi(secretary) {
+    if (!isApiConfigured()) {
+      console.info('[Sync] لا يوجد رابط API مضبوط — تم تجاوز الإرسال الفعلي (سكرتارية).', secretary);
+      return true;
+    }
+    try {
+      const res = await fetch(CONFIG.API_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ type: 'secretary_update', secretary }),
+      });
+      return res.ok;
+    } catch (err) {
+      console.warn('[Sync] فشل إرسال تحديث السكرتارية', secretary.id, err);
+      return false;
+    }
+  }
+
+  function isApiConfigured() {
+    return !!CONFIG.API_ENDPOINT && !CONFIG.API_ENDPOINT.includes('REPLACE_WITH_YOUR_DEPLOYMENT_ID');
   }
 
   function registerServiceWorker() {
@@ -567,13 +797,30 @@
      ===================================================================== */
 
   function buildGroupChips() {
-    const groups = Array.from(new Set(state.students.map((s) => s.group))).sort();
+    const groups = Array.from(new Set(getVisibleStudentsForCurrentUser().map((s) => s.group))).sort();
     els.groupChips.innerHTML = '<button class="chip active" data-group="all">الكل</button>' +
       groups.map((g) => `<button class="chip" data-group="${escapeHtml(g)}">${escapeHtml(g)}</button>`).join('');
   }
 
+  /**
+   * Returns the student roster this logged-in user is allowed to see.
+   * - master: sees everyone.
+   * - secretary: sees only students whose `group` is in their allowedGroups.
+   *   If allowedGroups is missing/empty, we treat it as "no restriction"
+   *   for backward compatibility with accounts that predate RBAC.
+   */
+  function getVisibleStudentsForCurrentUser() {
+    if (!state.currentUser) return [];
+    if (state.currentUser.role === 'master') return state.students;
+
+    const allowed = state.currentUser.allowedGroups;
+    if (!Array.isArray(allowed) || allowed.length === 0) return state.students;
+
+    return state.students.filter((s) => allowed.includes(s.group));
+  }
+
   function getFilteredStudents() {
-    let list = state.students;
+    let list = getVisibleStudentsForCurrentUser();
 
     if (state.activeGroup !== 'all') {
       list = list.filter((s) => s.group === state.activeGroup);
@@ -583,7 +830,7 @@
     if (q) {
       list = list.filter((s) =>
         s.name.toLowerCase().includes(q) ||
-        s.id.toLowerCase().includes(q)
+        String(s.id).toLowerCase().includes(q)
       );
     }
 
@@ -627,6 +874,14 @@
     node.querySelector('.student-name').textContent = student.name;
     node.querySelector('.student-id').textContent = student.id;
     node.querySelector('.tag-group').textContent = student.group;
+
+    if (student.syncStatus === 'pending_creation') {
+      const tags = node.querySelector('.student-tags');
+      const pendingTag = document.createElement('span');
+      pendingTag.className = 'tag tag-id';
+      pendingTag.textContent = '🆕 بانتظار المزامنة';
+      tags.appendChild(pendingTag);
+    }
 
     const existingRecord = getTodayRecordForStudent(student.id);
     const statusPill = node.querySelector('[data-role="statusPill"]');
@@ -692,7 +947,7 @@
   }
 
   async function saveStudentCard(card, studentId) {
-    const student = state.students.find((s) => s.id === studentId);
+    const student = state.students.find((s) => String(s.id) === String(studentId));
     if (!student) return;
 
     const attendance = card.querySelector('.attend-present').classList.contains('active')
@@ -757,6 +1012,88 @@
     const pendingCount = state.records.filter((r) => r.status === 'pending' || r.status === 'failed').length;
     els.pendingCountSecretary.textContent = pendingCount;
     els.localQueueSummary.classList.toggle('hidden', pendingCount === 0);
+  }
+
+  /* =====================================================================
+     ADD NEW STUDENT (Offline-First)
+     ===================================================================== */
+
+  function populateSelect(selectEl, options, placeholder) {
+    const current = selectEl.value;
+    selectEl.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>` +
+      (options || []).map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join('');
+    if (options && options.includes(current)) selectEl.value = current;
+  }
+
+  async function openAddStudentModal() {
+    // Always populate from the freshest cached settings.
+    state.settings = await db.getAllSettings();
+    const settings = (state.settings && Object.keys(state.settings).length > 0) ? state.settings : FALLBACK_SETTINGS;
+
+    populateSelect(els.newStudentYear, settings.years || FALLBACK_SETTINGS.years, 'اختر الصف');
+    populateSelect(els.newStudentBranch, settings.branches || FALLBACK_SETTINGS.branches, 'اختر الفرع');
+    populateSelect(els.newStudentDay, settings.days || FALLBACK_SETTINGS.days, 'اختر اليوم');
+    populateSelect(els.newStudentTime, settings.times || FALLBACK_SETTINGS.times, 'اختر الموعد');
+
+    els.newStudentName.value = '';
+    els.newStudentPhone.value = '';
+
+    els.addStudentModal.classList.remove('hidden');
+    els.addStudentModal.setAttribute('aria-hidden', 'false');
+    setTimeout(() => els.newStudentName.focus(), 100);
+  }
+
+  function closeAddStudentModal() {
+    els.addStudentModal.classList.add('hidden');
+    els.addStudentModal.setAttribute('aria-hidden', 'true');
+  }
+
+  async function saveNewStudent() {
+    const name = els.newStudentName.value.trim();
+    const phone = els.newStudentPhone.value.trim();
+    const year = els.newStudentYear.value;
+    const branch = els.newStudentBranch.value;
+    const day = els.newStudentDay.value;
+    const time = els.newStudentTime.value;
+
+    if (!name) {
+      showToast('من فضلك اكتب اسم الطالب', 'error');
+      els.newStudentName.focus();
+      return;
+    }
+    if (!year || !branch || !day || !time) {
+      showToast('من فضلك اختر جميع بيانات المجموعة (الصف/الفرع/اليوم/الموعد)', 'error');
+      return;
+    }
+
+    const group = buildGroupLabel(year, branch);
+
+    const newStudent = {
+      id: uid('NEW'),
+      name,
+      phone: phone || null,
+      year,
+      branch,
+      day,
+      time,
+      group,
+      syncStatus: 'pending_creation',
+      createdAt: Date.now(),
+      createdBy: state.currentUser ? state.currentUser.name : null,
+    };
+
+    await db.upsertStudent(newStudent);
+    state.students = await db.getAllStudents();
+
+    closeAddStudentModal();
+    buildGroupChips();
+    renderStudentsList();
+
+    showToast(`تم إضافة ${name} محليًا، يمكنك تسجيل حضوره الآن`, 'success');
+    vibrate([20, 30, 20]);
+
+    // Try to push immediately if online; otherwise it queues for later.
+    if (navigator.onLine) triggerSync();
   }
 
   /* =====================================================================
@@ -982,6 +1319,169 @@
         showToast('تم حذف السجل بنجاح', 'success');
       }
     );
+  }
+
+  /* =====================================================================
+     MANAGE SECRETARIES (Master only) — RBAC administration
+     ===================================================================== */
+
+  async function openManageSecretariesModal() {
+    state.secretaries = await db.getAllSecretaries();
+    renderSecretariesList();
+    els.manageSecretariesModal.classList.remove('hidden');
+    els.manageSecretariesModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeManageSecretariesModal() {
+    els.manageSecretariesModal.classList.add('hidden');
+    els.manageSecretariesModal.setAttribute('aria-hidden', 'true');
+  }
+
+  function renderSecretariesList() {
+    els.secretariesList.innerHTML = '';
+
+    // Master usually doesn't need to manage other masters — but show
+    // everyone except the currently logged-in master account for clarity.
+    const list = state.secretaries.filter((s) => s.role !== 'master');
+
+    if (list.length === 0) {
+      els.noSecretaries.classList.remove('hidden');
+      return;
+    }
+    els.noSecretaries.classList.add('hidden');
+
+    const frag = document.createDocumentFragment();
+    list.forEach((secretary) => {
+      frag.appendChild(buildSecretaryCard(secretary));
+    });
+    els.secretariesList.appendChild(frag);
+  }
+
+  function buildSecretaryCard(secretary) {
+    const node = els.secretaryCardTemplate.content.cloneNode(true);
+    const card = node.querySelector('.secretary-card');
+    card.dataset.id = secretary.id;
+
+    node.querySelector('.student-avatar').textContent = initials(secretary.name);
+    node.querySelector('[data-role="secName"]').textContent = secretary.name;
+    node.querySelector('[data-role="secRole"]').textContent = 'سكرتارية';
+
+    const groupsCount = Array.isArray(secretary.allowedGroups) ? secretary.allowedGroups.length : 0;
+    node.querySelector('[data-role="secGroupsCount"]').textContent =
+      groupsCount === 0 ? 'كل المجموعات' : `${groupsCount} مجموعة مسموحة`;
+
+    const syncBadge = node.querySelector('[data-role="secSyncBadge"]');
+    if (secretary.pendingSync) {
+      syncBadge.textContent = '⏳ بانتظار المزامنة';
+      syncBadge.classList.add('pending');
+    } else {
+      syncBadge.textContent = '✅ متزامن';
+    }
+
+    return node;
+  }
+
+  function handleSecretariesListClick(e) {
+    const card = e.target.closest('.secretary-card');
+    if (!card) return;
+    const secretaryId = card.dataset.id;
+
+    if (e.target.closest('[data-action="edit-perms"]')) {
+      openSecretaryPermsModal(secretaryId);
+    }
+  }
+
+  async function openSecretaryPermsModal(secretaryId) {
+    const secretary = await db.getSecretaryById(secretaryId);
+    if (!secretary) return;
+
+    state.activeSecretaryIdForPerms = secretaryId;
+    els.secretaryPermsName.textContent = `${secretary.name} — تحديد المجموعات المسموح بمتابعتها`;
+
+    state.settings = await db.getAllSettings();
+    const allGroups = getAllKnownGroups();
+
+    els.secretaryGroupsChecklist.innerHTML = '';
+
+    if (allGroups.length === 0) {
+      els.noGroupsForPerms.classList.remove('hidden');
+    } else {
+      els.noGroupsForPerms.classList.add('hidden');
+      const allowed = Array.isArray(secretary.allowedGroups) ? secretary.allowedGroups : [];
+
+      const frag = document.createDocumentFragment();
+      allGroups.forEach((group) => {
+        const item = document.createElement('label');
+        item.className = 'group-check-item';
+        item.dataset.group = group;
+        const isChecked = allowed.includes(group);
+        item.classList.toggle('checked', isChecked);
+        item.innerHTML = `
+          <input type="checkbox" ${isChecked ? 'checked' : ''} data-group="${escapeHtml(group)}">
+          <span>${escapeHtml(group)}</span>
+        `;
+        frag.appendChild(item);
+      });
+      els.secretaryGroupsChecklist.appendChild(frag);
+    }
+
+    els.secretaryPermsModal.classList.remove('hidden');
+    els.secretaryPermsModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeSecretaryPermsModal() {
+    state.activeSecretaryIdForPerms = null;
+    els.secretaryPermsModal.classList.add('hidden');
+    els.secretaryPermsModal.setAttribute('aria-hidden', 'true');
+  }
+
+  /**
+   * Combines groups from cached settings (if the API exposes a "groups"
+   * list directly) with groups derived from the actual student roster,
+   * so master always sees every real group even if settings.groups is
+   * missing or stale.
+   */
+  function getAllKnownGroups() {
+    const fromSettings = Array.isArray(state.settings.groups) ? state.settings.groups : [];
+    const fromStudents = state.students.map((s) => s.group).filter(Boolean);
+    return Array.from(new Set([...fromSettings, ...fromStudents])).sort();
+  }
+
+  function handleGroupsChecklistClick(e) {
+    const item = e.target.closest('.group-check-item');
+    if (!item) return;
+
+    // Let the native checkbox toggle happen, then sync the visual state.
+    const checkbox = item.querySelector('input[type="checkbox"]');
+    if (e.target !== checkbox) {
+      checkbox.checked = !checkbox.checked;
+    }
+    item.classList.toggle('checked', checkbox.checked);
+  }
+
+  async function saveSecretaryPerms() {
+    if (!state.activeSecretaryIdForPerms) return;
+    const secretary = await db.getSecretaryById(state.activeSecretaryIdForPerms);
+    if (!secretary) return;
+
+    const checkedBoxes = $$('input[type="checkbox"]', els.secretaryGroupsChecklist).filter((cb) => cb.checked);
+    const allowedGroups = checkedBoxes.map((cb) => cb.dataset.group);
+
+    const updated = {
+      ...secretary,
+      allowedGroups,
+      pendingSync: true,
+      updatedAt: Date.now(),
+    };
+
+    await db.upsertSecretary(updated);
+    state.secretaries = await db.getAllSecretaries();
+
+    closeSecretaryPermsModal();
+    renderSecretariesList();
+    showToast(`تم تحديث صلاحيات ${secretary.name} وسيتم مزامنتها تلقائيًا`, 'success');
+
+    if (navigator.onLine) triggerSync();
   }
 
   /* =====================================================================

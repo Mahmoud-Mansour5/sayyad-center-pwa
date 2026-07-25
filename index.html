@@ -94,6 +94,8 @@
           <span class="sync-dot"></span>
           <span id="syncBadgeText">متصل</span>
         </span>
+        <button id="addStudentBtn" class="icon-btn hidden" title="إضافة طالب جديد" aria-label="إضافة طالب جديد">➕</button>
+        <button id="manageSecretariesBtn" class="icon-btn hidden" title="إدارة السكرتارية" aria-label="إدارة السكرتارية">⚙️</button>
         <button id="logoutBtn" class="icon-btn" title="تسجيل الخروج" aria-label="تسجيل الخروج">🚪</button>
       </div>
     </div>
@@ -322,6 +324,117 @@
     </div>
   </div>
 </div>
+
+<!-- ============ ADD STUDENT MODAL ============ -->
+<div id="addStudentModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box edit-box">
+    <div class="modal-header">
+      <h2>إضافة طالب جديد</h2>
+      <button class="modal-close" id="addStudentModalClose" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>اسم الطالب</label>
+        <input type="text" class="input-field" id="newStudentName" placeholder="اكتب اسم الطالب بالكامل" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>رقم هاتف ولي الأمر</label>
+        <input type="tel" class="input-field" id="newStudentPhone" placeholder="01xxxxxxxxx" inputmode="tel" autocomplete="off">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>الصف الدراسي</label>
+          <select class="input-field select-field" id="newStudentYear">
+            <option value="">اختر الصف</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>الفرع</label>
+          <select class="input-field select-field" id="newStudentBranch">
+            <option value="">اختر الفرع</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>اليوم</label>
+          <select class="input-field select-field" id="newStudentDay">
+            <option value="">اختر اليوم</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>الموعد</label>
+          <select class="input-field select-field" id="newStudentTime">
+            <option value="">اختر الموعد</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="cancelAddStudentBtn">إلغاء</button>
+      <button class="btn btn-primary" id="saveNewStudentBtn">💾 حفظ الطالب</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MANAGE SECRETARIES MODAL ============ -->
+<div id="manageSecretariesModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box edit-box">
+    <div class="modal-header">
+      <h2>إدارة السكرتارية</h2>
+      <button class="modal-close" id="manageSecretariesModalClose" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="secretariesList" class="secretaries-list"></div>
+      <div id="noSecretaries" class="empty-state hidden">
+        <span class="empty-emoji">👤</span>
+        <p>لا يوجد سكرتارية مسجلين محليًا بعد</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ EDIT SECRETARY PERMISSIONS MODAL ============ -->
+<div id="secretaryPermsModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box edit-box">
+    <div class="modal-header">
+      <h2>صلاحيات المجموعات</h2>
+      <button class="modal-close" id="secretaryPermsModalClose" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="edit-student-name" id="secretaryPermsName"></p>
+      <div id="secretaryGroupsChecklist" class="groups-checklist"></div>
+      <div id="noGroupsForPerms" class="empty-state hidden">
+        <span class="empty-emoji">🏷️</span>
+        <p>لا توجد مجموعات متاحة بعد — يجب مزامنة الإعدادات أولًا</p>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="cancelSecretaryPermsBtn">إلغاء</button>
+      <button class="btn btn-primary" id="saveSecretaryPermsBtn">💾 حفظ الصلاحيات</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SECRETARY CARD TEMPLATE (Manage Secretaries modal) ============ -->
+<template id="secretaryCardTemplate">
+  <article class="secretary-card" data-id="">
+    <div class="secretary-card-head">
+      <div class="student-avatar small"></div>
+      <div class="student-meta">
+        <h3 class="student-name" data-role="secName"></h3>
+        <div class="student-tags">
+          <span class="tag tag-group" data-role="secRole"></span>
+          <span class="tag tag-id" data-role="secGroupsCount"></span>
+        </div>
+      </div>
+      <span class="sync-mini-badge" data-role="secSyncBadge"></span>
+    </div>
+    <button class="btn btn-ghost btn-small" data-action="edit-perms">🏷️ تعديل المجموعات المسموحة</button>
+  </article>
+</template>
 
 <script src="db.js"></script>
 <script src="app.js"></script>
