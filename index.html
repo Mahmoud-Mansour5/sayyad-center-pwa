@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>  الأستاذ محمود الصياد</title>
+<meta name="description" content="نظام إدارة مركز الأستاذ محمود الصياد للتطوير التعليمي - متابعة الحضور والدرجات والملاحظات">
+
+<!-- PWA Meta Tags -->
+<meta name="theme-color" content="#0B1220">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="مركز الصياد">
+<meta name="application-name" content="مركز الصياد">
+<meta name="format-detection" content="telephone=no">
+
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css">
+</head>
+<body dir="rtl">
+
+
+<!-- ============ SPLASH / LOADING SCREEN ============ -->
+<div id="splashScreen" class="splash-screen">
+  <div class="splash-content">
+    <div class="splash-logo">📚</div>
+    <h1 class="splash-title">  I'M Techno</h1>
+    <p class="splash-subtitle">الأستاذ محمود الصياد</p>
+    <div class="splash-loader"><span></span><span></span><span></span></div>
+  </div>
+</div>
+
+<!-- ============ LOGIN MODAL (PIN AUTH) ============ -->
+<div id="loginModal" class="modal-overlay" aria-hidden="false">
+  <div class="modal-box login-box">
+    <div class="login-header">
+      <div class="login-icon">🔐</div>
+      <h2>تسجيل الدخول</h2>
+      <p class="muted">من فضلك أدخل الرقم السري المكوّن من 4 أرقام</p>
+    </div>
+
+    <div class="pin-display" id="pinDisplay">
+      <span class="pin-dot" data-i="0"></span>
+      <span class="pin-dot" data-i="1"></span>
+      <span class="pin-dot" data-i="2"></span>
+      <span class="pin-dot" data-i="3"></span>
+    </div>
+
+    <p id="pinError" class="pin-error hidden">الرقم السري غير صحيح، حاول مرة أخرى</p>
+
+    <div class="pin-pad" id="pinPad">
+      <button class="pin-key" data-key="1">1</button>
+      <button class="pin-key" data-key="2">2</button>
+      <button class="pin-key" data-key="3">3</button>
+      <button class="pin-key" data-key="4">4</button>
+      <button class="pin-key" data-key="5">5</button>
+      <button class="pin-key" data-key="6">6</button>
+      <button class="pin-key" data-key="7">7</button>
+      <button class="pin-key" data-key="8">8</button>
+      <button class="pin-key" data-key="9">9</button>
+      <button class="pin-key pin-key-action" id="pinClear">مسح</button>
+      <button class="pin-key" data-key="0">0</button>
+      <button class="pin-key pin-key-action" id="pinBackspace">⌫</button>
+    </div>
+
+    <p class="login-hint muted">تلميح: السكرتارية 1234 &nbsp;|&nbsp; المدير 9999</p>
+  </div>
+</div>
+
+<!-- ============ APP ROOT ============ -->
+<div id="app" class="app-root hidden">
+
+  <!-- ===== TOP HEADER ===== -->
+  <header class="app-header">
+    <div class="header-top">
+      <div class="brand">
+        <span class="brand-emoji">📚</span>
+        <div class="brand-text">
+          <h1>الأستاذ محمود الصياد</h1>
+          <span class="brand-sub"> I'M Techno</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="syncBadge" class="sync-badge online">
+          <span class="sync-dot"></span>
+          <span id="syncBadgeText">متصل</span>
+        </span>
+        <button id="logoutBtn" class="icon-btn" title="تسجيل الخروج" aria-label="تسجيل الخروج">🚪</button>
+      </div>
+    </div>
+    <div class="header-user">
+      <span id="userRoleBadge" class="role-badge">سكرتارية</span>
+      <span id="userNameLabel" class="user-name">—</span>
+    </div>
+  </header>
+
+  <!-- ===== SECRETARY VIEW ===== -->
+  <main id="secretaryView" class="view hidden">
+
+    <section class="search-section">
+      <div class="search-bar">
+        <span class="search-icon">🔍</span>
+        <input type="search" id="studentSearch" placeholder="ابحث بالاسم أو رقم الطالب (مثال: 501 أو أحمد)" autocomplete="off" inputmode="search">
+        <button id="clearSearchBtn" class="clear-search-btn hidden" aria-label="مسح البحث">✕</button>
+      </div>
+      <div class="filter-chips" id="groupChips">
+        <button class="chip active" data-group="all">الكل</button>
+      </div>
+    </section>
+
+    <section class="queue-summary" id="localQueueSummary">
+      <div class="queue-summary-inner">
+        <span class="queue-icon">📥</span>
+        <span>سجلات بانتظار المزامنة: <strong id="pendingCountSecretary">0</strong></span>
+      </div>
+    </section>
+
+    <section class="students-section">
+      <div id="studentsList" class="students-list"></div>
+      <div id="noResults" class="empty-state hidden">
+        <span class="empty-emoji">🕵️‍♂️</span>
+        <p>لا توجد نتائج مطابقة لبحثك</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== MASTER / TEACHER DASHBOARD VIEW ===== -->
+  <main id="masterView" class="view hidden">
+
+    <section class="stats-grid">
+      <div class="stat-card stat-blue">
+        <span class="stat-icon">👥</span>
+        <div class="stat-info">
+          <span class="stat-value" id="statTotalStudents">0</span>
+          <span class="stat-label">إجمالي الطلاب</span>
+        </div>
+      </div>
+      <div class="stat-card stat-purple">
+        <span class="stat-icon">🏷️</span>
+        <div class="stat-info">
+          <span class="stat-value" id="statActiveGroups">0</span>
+          <span class="stat-label">المجموعات النشطة</span>
+        </div>
+      </div>
+      <div class="stat-card stat-orange">
+        <span class="stat-icon">⏳</span>
+        <div class="stat-info">
+          <span class="stat-value" id="statPendingApprovals">0</span>
+          <span class="stat-label">طابور الاعتماد</span>
+        </div>
+      </div>
+      <div class="stat-card stat-green">
+        <span class="stat-icon">✅</span>
+        <div class="stat-info">
+          <span class="stat-value" id="statApprovedToday">0</span>
+          <span class="stat-label">تم اعتمادها اليوم</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="approvals-section">
+      <div class="section-header">
+        <h2>طابور اعتماد السجلات</h2>
+        <button id="approveAllBtn" class="btn btn-small btn-ghost">اعتماد الكل</button>
+      </div>
+      <div id="approvalsList" class="approvals-list"></div>
+      <div id="noApprovals" class="empty-state hidden">
+        <span class="empty-emoji">🎉</span>
+        <p>لا توجد سجلات بانتظار الاعتماد حاليًا</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== BOTTOM TOAST CONTAINER ===== -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+</div>
+
+<!-- ============ STUDENT CARD TEMPLATE ============ -->
+<template id="studentCardTemplate">
+  <article class="student-card" data-id="">
+    <div class="student-card-head">
+      <div class="student-avatar"></div>
+      <div class="student-meta">
+        <h3 class="student-name"></h3>
+        <div class="student-tags">
+          <span class="tag tag-id">#<span class="student-id"></span></span>
+          <span class="tag tag-group"></span>
+        </div>
+      </div>
+      <span class="status-pill status-none" data-role="statusPill">لم يُسجَّل بعد</span>
+    </div>
+
+    <div class="attendance-row">
+      <button class="attend-btn attend-present" data-action="present">
+        <span class="attend-icon">✅</span> حاضر
+      </button>
+      <button class="attend-btn attend-absent" data-action="absent">
+        <span class="attend-icon">❌</span> غائب
+      </button>
+    </div>
+
+    <div class="student-form">
+      <div class="form-row">
+        <div class="form-group">
+          <label>درجة الواجب</label>
+          <input type="number" class="input-field" data-field="homeworkGrade" min="0" max="100" placeholder="0-100" inputmode="numeric">
+        </div>
+        <div class="form-group">
+          <label>درجة الامتحان</label>
+          <input type="number" class="input-field" data-field="examGrade" min="0" max="100" placeholder="0-100" inputmode="numeric">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>ملاحظات</label>
+        <textarea class="input-field textarea-field" data-field="notes" rows="2" placeholder="اكتب أي ملاحظات عن الطالب..."></textarea>
+      </div>
+    </div>
+
+    <button class="btn btn-save" data-action="save">
+      <span class="save-icon">💾</span> حفظ البيانات (أوفلاين)
+    </button>
+  </article>
+</template>
+
+<!-- ============ APPROVAL CARD TEMPLATE ============ -->
+<template id="approvalCardTemplate">
+  <article class="approval-card" data-id="">
+    <div class="approval-head">
+      <div class="student-avatar small"></div>
+      <div class="student-meta">
+        <h3 class="student-name"></h3>
+        <div class="student-tags">
+          <span class="tag tag-id">#<span class="student-id"></span></span>
+          <span class="tag tag-group"></span>
+        </div>
+      </div>
+      <span class="approval-time" data-role="time"></span>
+    </div>
+
+    <div class="approval-summary">
+      <div class="summary-pill" data-role="attendancePill">—</div>
+      <div class="summary-pill" data-role="homeworkPill">واجب: —</div>
+      <div class="summary-pill" data-role="examPill">امتحان: —</div>
+    </div>
+
+    <p class="approval-notes" data-role="notesText"></p>
+
+    <div class="approval-footer">
+      <span class="approval-secretary" data-role="secretaryName"></span>
+    </div>
+
+    <div class="approval-actions">
+      <button class="btn btn-approve" data-action="approve">
+        <span>✅</span> اعتماد وإرسال
+      </button>
+      <button class="btn btn-edit" data-action="edit">
+        <span>✏️</span> تعديل/إلغاء
+      </button>
+    </div>
+  </article>
+</template>
+
+<!-- ============ EDIT RECORD MODAL ============ -->
+<div id="editModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box edit-box">
+    <div class="modal-header">
+      <h2>تعديل السجل</h2>
+      <button class="modal-close" id="editModalClose" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="edit-student-name" id="editStudentName"></p>
+
+      <div class="attendance-row">
+        <button class="attend-btn attend-present" id="editPresentBtn" data-action="present">
+          <span class="attend-icon">✅</span> حاضر
+        </button>
+        <button class="attend-btn attend-absent" id="editAbsentBtn" data-action="absent">
+          <span class="attend-icon">❌</span> غائب
+        </button>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>درجة الواجب</label>
+          <input type="number" class="input-field" id="editHomeworkGrade" min="0" max="100" inputmode="numeric">
+        </div>
+        <div class="form-group">
+          <label>درجة الامتحان</label>
+          <input type="number" class="input-field" id="editExamGrade" min="0" max="100" inputmode="numeric">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>ملاحظات</label>
+        <textarea class="input-field textarea-field" id="editNotes" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" id="deleteRecordBtn">🗑️ حذف السجل</button>
+      <button class="btn btn-primary" id="saveEditBtn">💾 حفظ التعديلات</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ CONFIRM DIALOG ============ -->
+<div id="confirmModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box confirm-box">
+    <div class="confirm-icon">⚠️</div>
+    <h3 id="confirmTitle">هل أنت متأكد؟</h3>
+    <p id="confirmMessage" class="muted"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost" id="confirmCancelBtn">إلغاء</button>
+      <button class="btn btn-danger" id="confirmOkBtn">تأكيد</button>
+    </div>
+  </div>
+</div>
+
+<script src="db.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
