@@ -27,7 +27,7 @@
 
   const CONFIG = {
     // Replace with your real backend endpoint (REST API / Apps Script / etc).
-    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbyWV-61vjKv4DosCKvnFbemq9BfTOSzAZY4baLPoudCNAy1hSTadTUiA_e9JwLv6XIu/exec',
+    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbzxG8LirkxPxRYnZgSejb6smlNBYU9jH6eMVj0Tnvzo4jhxUPnN7CugRk-IGzJUjqqE/exec',
 
     PIN_LENGTH: 4,
 
