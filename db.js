@@ -1,52 +1,45 @@
 /**
  * db.js
  * -------------------------------------------------------------
- * IndexedDB wrapper for the Al-Sayyad Educational Center PWA.
- * Handles:
- *   - "students"    store: master roster, fetched from the API and
- *                   cached offline. New students created offline by a
- *                   secretary are stored with syncStatus:'pending_creation'
- *                   until pushed to the server.
- *   - "records"     store: attendance/grades/notes entries created by
- *                   secretaries, each with a sync `status`:
- *                       "pending"  -> saved offline, not yet approved
- *                       "approved" -> approved by master & sent to API
- *                       "failed"   -> approved but API push failed (retry)
- *   - "settings"    store: dropdown option lists (Branches, Years, Days,
- *                   Times, Groups...) fetched from the API and cached.
- *   - "secretaries" store: role-based accounts (id, name, pin, role,
- *                   allowedGroups) fetched from the API and cached.
- *                   Login authenticates against this store. Any local
- *                   edits (e.g. master updating allowedGroups, or adding
- *                   a new account) are flagged with pendingSync:true for
- *                   the sync engine.
- *   - "meta"        store: small key/value operational data (last sync).
+ * IndexedDB wrapper for مركز الأستاذ محمود الصياد للتطوير التعليمي
  *
- * Falls back to an in-memory + localStorage shim automatically if
- * IndexedDB is unavailable (e.g. private browsing edge cases), so the
- * rest of the app never has to know which storage engine is active.
+ * Stores:
+ *   - "students"   master roster, cached from API. Offline-created students
+ *                  carry syncStatus:'pending_creation' until pushed.
+ *   - "records"    attendance + grades entries. Status lifecycle:
+ *                      "draft"    → Present clicked; timestamp captured.
+ *                      "pending"  → إرسال للاعتماد clicked; grades attached.
+ *                      "approved" → approved by admin; queued for API push.
+ *                      "synced"   → successfully pushed to API.
+ *                      "failed"   → approved but API push failed; will retry.
+ *   - "settings"   dropdown option lists (branches, years, days, times).
+ *   - "meta"       small key/value operational data (last sync time).
+ *
+ * NOTE: "secretaries" store has been REMOVED (Change #1 — single admin user).
+ *       PIN authentication is now handled via a hardcoded value; no DB store needed.
+ *
+ * Falls back to an in-memory + localStorage shim if IndexedDB is unavailable.
  * -------------------------------------------------------------
  */
 
-const DB_NAME = 'sayyad_center_db';
-const DB_VERSION = 2;
+const DB_NAME    = 'sayyad_center_db';
+const DB_VERSION = 3;               // bumped from 2 to trigger onupgradeneeded
+
 const STORE_STUDENTS = 'students';
-const STORE_RECORDS = 'records';
-const STORE_META = 'meta';
+const STORE_RECORDS  = 'records';
+const STORE_META     = 'meta';
 const STORE_SETTINGS = 'settings';
-const STORE_SECRETARIES = 'secretaries';
 
 class SayyadDB {
   constructor() {
-    this._db = null;
-    this._ready = null;
+    this._db          = null;
+    this._ready       = null;
     this._useFallback = false;
     this._fallbackData = {
       students: [],
-      records: [],
-      meta: {},
+      records:  [],
+      meta:     {},
       settings: [],
-      secretaries: [],
     };
   }
 
@@ -59,7 +52,7 @@ class SayyadDB {
 
     this._ready = new Promise((resolve) => {
       if (!('indexedDB' in window)) {
-        console.warn('[SayyadDB] IndexedDB غير متاح، سيتم استخدام التخزين المحلي البديل.');
+        console.warn('[SayyadDB] IndexedDB غير متاح — تفعيل التخزين البديل.');
         this._useFallback = true;
         this._loadFallbackFromLocalStorage();
         resolve();
@@ -70,7 +63,7 @@ class SayyadDB {
       try {
         request = indexedDB.open(DB_NAME, DB_VERSION);
       } catch (err) {
-        console.warn('[SayyadDB] فشل فتح IndexedDB، التحويل للتخزين البديل.', err);
+        console.warn('[SayyadDB] فشل فتح IndexedDB.', err);
         this._useFallback = true;
         this._loadFallbackFromLocalStorage();
         resolve();
@@ -78,33 +71,40 @@ class SayyadDB {
       }
 
       request.onupgradeneeded = (event) => {
-        const db = event.target.result;
+        const db      = event.target.result;
+        const oldVer  = event.oldVersion;
 
+        /* Students store */
         if (!db.objectStoreNames.contains(STORE_STUDENTS)) {
-          const studentsStore = db.createObjectStore(STORE_STUDENTS, { keyPath: 'id' });
-          studentsStore.createIndex('name', 'name', { unique: false });
-          studentsStore.createIndex('group', 'group', { unique: false });
+          const ss = db.createObjectStore(STORE_STUDENTS, { keyPath: 'id' });
+          ss.createIndex('name',  'name',  { unique: false });
+          ss.createIndex('group', 'group', { unique: false });
+          ss.createIndex('year',  'year',  { unique: false });
         }
 
+        /* Records store */
         if (!db.objectStoreNames.contains(STORE_RECORDS)) {
-          const recordsStore = db.createObjectStore(STORE_RECORDS, { keyPath: 'recordId' });
-          recordsStore.createIndex('studentId', 'studentId', { unique: false });
-          recordsStore.createIndex('status', 'status', { unique: false });
-          recordsStore.createIndex('createdAt', 'createdAt', { unique: false });
+          const rs = db.createObjectStore(STORE_RECORDS, { keyPath: 'recordId' });
+          rs.createIndex('studentId', 'studentId', { unique: false });
+          rs.createIndex('status',    'status',    { unique: false });
+          rs.createIndex('createdAt', 'createdAt', { unique: false });
+          rs.createIndex('dateKey',   'dateKey',   { unique: false });
         }
 
+        /* Meta store */
         if (!db.objectStoreNames.contains(STORE_META)) {
           db.createObjectStore(STORE_META, { keyPath: 'key' });
         }
 
+        /* Settings store */
         if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
-          // keyPath 'key' e.g. 'branches' | 'years' | 'days' | 'times' | 'groups'
           db.createObjectStore(STORE_SETTINGS, { keyPath: 'key' });
         }
 
-        if (!db.objectStoreNames.contains(STORE_SECRETARIES)) {
-          const secStore = db.createObjectStore(STORE_SECRETARIES, { keyPath: 'id' });
-          secStore.createIndex('pin', 'pin', { unique: false });
+        /* ── REMOVED: secretaries store (Change #1) ──
+         * If upgrading from v2, drop the old store to keep things clean. */
+        if (oldVer < 3 && db.objectStoreNames.contains('secretaries')) {
+          db.deleteObjectStore('secretaries');
         }
       };
 
@@ -114,7 +114,7 @@ class SayyadDB {
       };
 
       request.onerror = (event) => {
-        console.warn('[SayyadDB] خطأ في IndexedDB، التحويل للتخزين البديل.', event.target.error);
+        console.warn('[SayyadDB] خطأ IndexedDB — تفعيل التخزين البديل.', event.target.error);
         this._useFallback = true;
         this._loadFallbackFromLocalStorage();
         resolve();
@@ -146,7 +146,7 @@ class SayyadDB {
   }
 
   /* ------------------------------------------------------------ */
-  /* Low-level transaction helper (IndexedDB path)                 */
+  /* Low-level transaction helper                                  */
   /* ------------------------------------------------------------ */
 
   _tx(storeName, mode = 'readonly') {
@@ -158,17 +158,14 @@ class SayyadDB {
      ================================================================ */
 
   /**
-   * Replace the entire local roster with a fresh copy from the API.
-   * Students that were created locally and are still pending creation
-   * (not yet acknowledged by the server) are preserved so they aren't
-   * wiped out by a refresh that raced ahead of the sync.
+   * Replace the full local roster with a fresh server copy.
+   * Locally-created students still pending creation are preserved.
    */
   async replaceAllStudents(freshList) {
     await this.init();
-    const existing = await this.getAllStudents();
+    const existing    = await this.getAllStudents();
     const stillPending = existing.filter((s) => s.syncStatus === 'pending_creation');
-
-    const merged = [...freshList, ...stillPending];
+    const merged      = [...freshList, ...stillPending];
 
     if (this._useFallback) {
       this._fallbackData.students = merged;
@@ -177,14 +174,12 @@ class SayyadDB {
     }
 
     return new Promise((resolve, reject) => {
-      const store = this._tx(STORE_STUDENTS, 'readwrite');
+      const store    = this._tx(STORE_STUDENTS, 'readwrite');
       const clearReq = store.clear();
-      clearReq.onsuccess = () => {
-        merged.forEach((s) => store.put(s));
-      };
+      clearReq.onsuccess = () => { merged.forEach((s) => store.put(s)); };
       const tx = store.transaction;
       tx.oncomplete = () => resolve(merged);
-      tx.onerror = () => reject(tx.error);
+      tx.onerror    = () => reject(tx.error);
     });
   }
 
@@ -193,27 +188,26 @@ class SayyadDB {
     if (this._useFallback) {
       const idx = this._fallbackData.students.findIndex((s) => s.id === student.id);
       if (idx >= 0) this._fallbackData.students[idx] = student;
-      else this._fallbackData.students.push(student);
+      else          this._fallbackData.students.push(student);
       this._persistFallback();
       return student;
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_STUDENTS, 'readwrite');
-      const req = store.put(student);
+      const req   = store.put(student);
       req.onsuccess = () => resolve(student);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
   async getAllStudents() {
     await this.init();
     if (this._useFallback) return [...this._fallbackData.students];
-
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_STUDENTS);
-      const req = store.getAll();
+      const req   = store.getAll();
       req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -224,9 +218,9 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_STUDENTS);
-      const req = store.get(id);
+      const req   = store.get(id);
       req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -236,42 +230,34 @@ class SayyadDB {
   }
 
   /* ================================================================
-     RECORDS (offline queue / attendance+grades entries)
+     RECORDS
      ================================================================ */
 
-  /**
-   * Create or overwrite a record. Used when the secretary hits "save".
-   * Each save for a given student on the same day overwrites the
-   * previous pending record for that student/day, so re-saving updates
-   * rather than duplicating.
-   */
   async upsertRecord(record) {
     await this.init();
     if (this._useFallback) {
       const idx = this._fallbackData.records.findIndex((r) => r.recordId === record.recordId);
       if (idx >= 0) this._fallbackData.records[idx] = record;
-      else this._fallbackData.records.push(record);
+      else          this._fallbackData.records.push(record);
       this._persistFallback();
       return record;
     }
-
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_RECORDS, 'readwrite');
-      const req = store.put(record);
+      const req   = store.put(record);
       req.onsuccess = () => resolve(record);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
   async getAllRecords() {
     await this.init();
     if (this._useFallback) return [...this._fallbackData.records];
-
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_RECORDS);
-      const req = store.getAll();
+      const req   = store.getAll();
       req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -280,9 +266,19 @@ class SayyadDB {
     return all.filter((r) => r.status === status);
   }
 
+  /**
+   * Returns today's record for a student that is NOT yet fully approved/synced.
+   * Includes 'draft' and 'pending' so the two-step flow can continue from where
+   * the user left off.
+   */
   async getRecordByStudentToday(studentId, dateStr) {
     const all = await this.getAllRecords();
-    return all.find((r) => r.studentId === studentId && r.dateKey === dateStr && r.status !== 'approved') || null;
+    return all.find(
+      (r) => r.studentId === studentId &&
+             r.dateKey   === dateStr   &&
+             r.status    !== 'approved' &&
+             r.status    !== 'synced'
+    ) || null;
   }
 
   async getRecord(recordId) {
@@ -292,9 +288,9 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_RECORDS);
-      const req = store.get(recordId);
+      const req   = store.get(recordId);
       req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -307,9 +303,9 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_RECORDS, 'readwrite');
-      const req = store.delete(recordId);
+      const req   = store.delete(recordId);
       req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -321,24 +317,24 @@ class SayyadDB {
   }
 
   /* ================================================================
-     SETTINGS (dropdown option lists: branches, years, days, times, groups)
+     SETTINGS (branches, years, days, times)
      ================================================================ */
 
   async setSetting(key, value) {
     await this.init();
     if (this._useFallback) {
-      const idx = this._fallbackData.settings.findIndex((s) => s.key === key);
+      const idx   = this._fallbackData.settings.findIndex((s) => s.key === key);
       const entry = { key, value };
       if (idx >= 0) this._fallbackData.settings[idx] = entry;
-      else this._fallbackData.settings.push(entry);
+      else          this._fallbackData.settings.push(entry);
       this._persistFallback();
       return value;
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_SETTINGS, 'readwrite');
-      const req = store.put({ key, value });
+      const req   = store.put({ key, value });
       req.onsuccess = () => resolve(value);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -350,9 +346,9 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_SETTINGS);
-      const req = store.get(key);
+      const req   = store.get(key);
       req.onsuccess = () => resolve(req.result ? req.result.value : null);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -365,7 +361,7 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_SETTINGS);
-      const req = store.getAll();
+      const req   = store.getAll();
       req.onsuccess = () => {
         const obj = {};
         (req.result || []).forEach((s) => { obj[s.key] = s.value; });
@@ -376,91 +372,7 @@ class SayyadDB {
   }
 
   /* ================================================================
-     SECRETARIES (role-based accounts used for PIN login)
-     ================================================================ */
-
-  async replaceAllSecretaries(freshList) {
-    await this.init();
-    if (this._useFallback) {
-      this._fallbackData.secretaries = freshList;
-      this._persistFallback();
-      return freshList;
-    }
-    return new Promise((resolve, reject) => {
-      const store = this._tx(STORE_SECRETARIES, 'readwrite');
-      const clearReq = store.clear();
-      clearReq.onsuccess = () => {
-        freshList.forEach((s) => store.put(s));
-      };
-      const tx = store.transaction;
-      tx.oncomplete = () => resolve(freshList);
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-
-  async upsertSecretary(secretary) {
-    await this.init();
-    if (this._useFallback) {
-      const idx = this._fallbackData.secretaries.findIndex((s) => s.id === secretary.id);
-      if (idx >= 0) this._fallbackData.secretaries[idx] = secretary;
-      else this._fallbackData.secretaries.push(secretary);
-      this._persistFallback();
-      return secretary;
-    }
-    return new Promise((resolve, reject) => {
-      const store = this._tx(STORE_SECRETARIES, 'readwrite');
-      const req = store.put(secretary);
-      req.onsuccess = () => resolve(secretary);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  async deleteSecretary(secretaryId) {
-    await this.init();
-    if (this._useFallback) {
-      this._fallbackData.secretaries = this._fallbackData.secretaries.filter((s) => s.id !== secretaryId);
-      this._persistFallback();
-      return true;
-    }
-    return new Promise((resolve, reject) => {
-      const store = this._tx(STORE_SECRETARIES, 'readwrite');
-      const req = store.delete(secretaryId);
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  async getAllSecretaries() {
-    await this.init();
-    if (this._useFallback) return [...this._fallbackData.secretaries];
-    return new Promise((resolve, reject) => {
-      const store = this._tx(STORE_SECRETARIES);
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  async getSecretaryByPin(pin) {
-    const all = await this.getAllSecretaries();
-    return all.find((s) => String(s.pin) === String(pin)) || null;
-  }
-
-  async getSecretaryById(id) {
-    await this.init();
-    if (this._useFallback) {
-      return this._fallbackData.secretaries.find((s) => s.id === id) || null;
-    }
-    return new Promise((resolve, reject) => {
-      const store = this._tx(STORE_SECRETARIES);
-      const req = store.get(id);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  /* ================================================================
-     META (small key/value settings, e.g. last sync time)
+     META
      ================================================================ */
 
   async setMeta(key, value) {
@@ -472,9 +384,9 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_META, 'readwrite');
-      const req = store.put({ key, value });
+      const req   = store.put({ key, value });
       req.onsuccess = () => resolve(value);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 
@@ -485,9 +397,9 @@ class SayyadDB {
     }
     return new Promise((resolve, reject) => {
       const store = this._tx(STORE_META);
-      const req = store.get(key);
+      const req   = store.get(key);
       req.onsuccess = () => resolve(req.result ? req.result.value : null);
-      req.onerror = () => reject(req.error);
+      req.onerror   = () => reject(req.error);
     });
   }
 }

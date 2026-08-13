@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
-<title>  الأستاذ محمود الصياد</title>
+<title>الأستاذ محمود الصياد</title>
 <meta name="description" content="نظام إدارة مركز الأستاذ محمود الصياد للتطوير التعليمي - متابعة الحضور والدرجات والملاحظات">
 
 <!-- PWA Meta Tags -->
@@ -33,13 +33,13 @@
 <div id="splashScreen" class="splash-screen">
   <div class="splash-content">
     <div class="splash-logo">📚</div>
-    <h1 class="splash-title">  I'M Techno</h1>
+    <h1 class="splash-title">I'M Techno</h1>
     <p class="splash-subtitle">الأستاذ محمود الصياد</p>
     <div class="splash-loader"><span></span><span></span><span></span></div>
   </div>
 </div>
 
-<!-- ============ LOGIN MODAL (PIN AUTH) ============ -->
+<!-- ============ LOGIN MODAL (PIN AUTH — hardcoded) ============ -->
 <div id="loginModal" class="modal-overlay" aria-hidden="false">
   <div class="modal-box login-box">
     <div class="login-header">
@@ -85,7 +85,7 @@
         <span class="brand-emoji">📚</span>
         <div class="brand-text">
           <h1>الأستاذ محمود الصياد</h1>
-          <span class="brand-sub"> I'M Techno</span>
+          <span class="brand-sub">I'M Techno</span>
         </div>
       </div>
       <div class="header-actions">
@@ -94,24 +94,29 @@
           <span id="syncBadgeText">متصل</span>
         </span>
         <button id="themeToggleBtn" class="icon-btn" title="تبديل الوضع الليلي/النهاري" aria-label="تبديل الوضع الليلي/النهاري">🌓</button>
-        <button id="addStudentBtn" class="icon-btn hidden" title="إضافة طالب جديد" aria-label="إضافة طالب جديد">➕</button>
-        <button id="manageSecretariesBtn" class="icon-btn hidden" title="إدارة السكرتارية" aria-label="إدارة السكرتارية">⚙️</button>
+        <button id="addStudentBtn" class="icon-btn" title="إضافة طالب جديد" aria-label="إضافة طالب جديد">➕</button>
         <button id="logoutBtn" class="icon-btn" title="تسجيل الخروج" aria-label="تسجيل الخروج">🚪</button>
       </div>
     </div>
-    <div class="header-user">
-      <span id="userRoleBadge" class="role-badge">سكرتارية</span>
-      <span id="userNameLabel" class="user-name">—</span>
+    <!-- Tab navigation: student attendance view ↔ approvals dashboard -->
+    <div class="header-tabs">
+      <button class="header-tab active" id="tabAttendance" data-tab="attendance">
+        <span>👥</span> الطلاب
+      </button>
+      <button class="header-tab" id="tabApprovals" data-tab="approvals">
+        <span>⏳</span> طابور الاعتماد
+        <span class="tab-badge hidden" id="pendingTabBadge">0</span>
+      </button>
     </div>
   </header>
 
-  <!-- ===== SECRETARY VIEW ===== -->
-  <main id="secretaryView" class="view hidden">
+  <!-- ===== ATTENDANCE VIEW ===== -->
+  <main id="attendanceView" class="view">
 
     <section class="search-section">
       <div class="search-bar">
         <span class="search-icon">🔍</span>
-        <input type="search" id="studentSearch" placeholder="ابحث بالاسم أو رقم الطالب (مثال: 501 أو أحمد)" autocomplete="off" inputmode="search">
+        <input type="search" id="studentSearch" placeholder="ابحث بالاسم أو رقم الطالب (مثال: 1001 أو أحمد)" autocomplete="off" inputmode="search">
         <button id="clearSearchBtn" class="clear-search-btn hidden" aria-label="مسح البحث">✕</button>
       </div>
       <div class="filter-chips" id="groupChips">
@@ -119,10 +124,10 @@
       </div>
     </section>
 
-    <section class="queue-summary" id="localQueueSummary">
+    <section class="queue-summary hidden" id="localQueueSummary">
       <div class="queue-summary-inner">
         <span class="queue-icon">📥</span>
-        <span>سجلات بانتظار المزامنة: <strong id="pendingCountSecretary">0</strong></span>
+        <span>سجلات بانتظار الاعتماد: <strong id="pendingCountDisplay">0</strong></span>
       </div>
     </section>
 
@@ -135,8 +140,8 @@
     </section>
   </main>
 
-  <!-- ===== MASTER / TEACHER DASHBOARD VIEW ===== -->
-  <main id="masterView" class="view hidden">
+  <!-- ===== APPROVALS / DASHBOARD VIEW ===== -->
+  <main id="approvalsView" class="view hidden">
 
     <section class="stats-grid">
       <div class="stat-card stat-blue">
@@ -174,9 +179,32 @@
         <h2>طابور اعتماد السجلات</h2>
         <div class="section-header-actions">
           <button id="exportExcelBtn" class="btn btn-small btn-ghost">📊 تصدير Excel</button>
-          <button id="approveAllBtn" class="btn btn-small btn-ghost">اعتماد الكل</button>
+          <button id="approveAllBtn" class="btn btn-small btn-ghost hidden">اعتماد الكل</button>
         </div>
       </div>
+
+      <!-- Drill-down filter dropdowns (Change #4) -->
+      <div class="approval-filters" id="approvalFilters">
+        <div class="filter-group">
+          <label class="filter-label">الصف</label>
+          <select class="input-field select-field filter-select" id="filterYear">
+            <option value="">— كل الصفوف —</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">اليوم</label>
+          <select class="input-field select-field filter-select" id="filterDay">
+            <option value="">— كل الأيام —</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">الموعد</label>
+          <select class="input-field select-field filter-select" id="filterTime">
+            <option value="">— كل المواعيد —</option>
+          </select>
+        </div>
+      </div>
+
       <div id="approvalsList" class="approvals-list"></div>
       <div id="noApprovals" class="empty-state hidden">
         <span class="empty-emoji">🎉</span>
@@ -190,6 +218,12 @@
 </div>
 
 <!-- ============ STUDENT CARD TEMPLATE ============ -->
+<!--
+  Two-step attendance (Change #3):
+  - Only "حاضر" button; no "غائب" button.
+  - Clicking حاضر: saves draft + shows green confirmation banner.
+  - Save button text is "إرسال للاعتماد"; click upgrades draft→pending.
+-->
 <template id="studentCardTemplate">
   <article class="student-card" data-id="">
     <div class="student-card-head">
@@ -204,12 +238,19 @@
       <span class="status-pill status-none" data-role="statusPill">لم يُسجَّل بعد</span>
     </div>
 
-    <div class="attendance-row">
+    <!-- Draft confirmation banner (hidden until حاضر is clicked) -->
+    <div class="draft-confirm hidden" data-role="draftConfirm">
+      <span class="draft-confirm-icon">✅</span>
+      <div class="draft-confirm-text">
+        <strong>تم تسجيل الدخول</strong>
+        <span data-role="draftTime" class="draft-time"></span>
+      </div>
+    </div>
+
+    <!-- Single attendance button: حاضر only (Change #3) -->
+    <div class="attendance-row-single">
       <button class="attend-btn attend-present" data-action="present">
         <span class="attend-icon">✅</span> حاضر
-      </button>
-      <button class="attend-btn attend-absent" data-action="absent">
-        <span class="attend-icon">❌</span> غائب
       </button>
     </div>
 
@@ -238,8 +279,9 @@
       </div>
     </div>
 
-    <button class="btn btn-save" data-action="save">
-      <span class="save-icon">💾</span> حفظ البيانات (أوفلاين)
+    <!-- Step 2: "إرسال للاعتماد" — disabled until step 1 (draft) is done -->
+    <button class="btn btn-save" data-action="save" disabled>
+      <span class="save-icon">📤</span> إرسال للاعتماد
     </button>
   </article>
 </template>
@@ -260,7 +302,7 @@
     </div>
 
     <div class="approval-summary">
-      <div class="summary-pill" data-role="attendancePill">—</div>
+      <div class="summary-pill present-pill" data-role="attendancePill">✅ حاضر</div>
       <div class="summary-pill" data-role="homeworkPill">واجب: —</div>
       <div class="summary-pill" data-role="examPill">امتحان: —</div>
     </div>
@@ -268,7 +310,7 @@
     <p class="approval-notes" data-role="notesText"></p>
 
     <div class="approval-footer">
-      <span class="approval-secretary" data-role="secretaryName"></span>
+      <span class="approval-meta" data-role="metaText"></span>
     </div>
 
     <div class="approval-actions">
@@ -282,7 +324,7 @@
   </article>
 </template>
 
-<!-- ============ EDIT RECORD MODAL ============ -->
+<!-- ============ EDIT RECORD MODAL (from approvals queue) ============ -->
 <div id="editModal" class="modal-overlay hidden" aria-hidden="true">
   <div class="modal-box edit-box">
     <div class="modal-header">
@@ -292,16 +334,13 @@
     <div class="modal-body">
       <p class="edit-student-name" id="editStudentName"></p>
 
-      <div class="attendance-row">
-        <button class="attend-btn attend-present" id="editPresentBtn" data-action="present">
-          <span class="attend-icon">✅</span> حاضر
-        </button>
-        <button class="attend-btn attend-absent" id="editAbsentBtn" data-action="absent">
-          <span class="attend-icon">❌</span> غائب
-        </button>
+      <!-- In edit modal: attendance is always present (only present records exist now) -->
+      <div class="edit-attendance-badge">
+        <span class="summary-pill present-pill">✅ حاضر</span>
+        <span class="muted" style="font-size:12px; margin-right:8px;">الحضور مسجّل بالفعل</span>
       </div>
 
-      <div class="form-row">
+      <div class="form-row" style="margin-top:16px;">
         <div class="form-group">
           <label>درجة الواجب</label>
           <div class="grade-pair">
@@ -319,7 +358,7 @@
           </div>
         </div>
       </div>
-      <div class="form-group">
+      <div class="form-group" style="margin-top:12px;">
         <label>ملاحظات</label>
         <textarea class="input-field textarea-field" id="editNotes" rows="3"></textarea>
       </div>
@@ -390,6 +429,12 @@
           </select>
         </div>
       </div>
+
+      <!-- Smart ID preview (Change #2) -->
+      <div class="id-preview" id="idPreview">
+        <span class="id-preview-label">كود الطالب المتوقع:</span>
+        <span class="id-preview-value" id="idPreviewValue">—</span>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="cancelAddStudentBtn">إلغاء</button>
@@ -397,98 +442,6 @@
     </div>
   </div>
 </div>
-
-<!-- ============ MANAGE SECRETARIES MODAL ============ -->
-<div id="manageSecretariesModal" class="modal-overlay hidden" aria-hidden="true">
-  <div class="modal-box edit-box">
-    <div class="modal-header">
-      <h2>إدارة السكرتارية</h2>
-      <button class="modal-close" id="manageSecretariesModalClose" aria-label="إغلاق">✕</button>
-    </div>
-    <div class="modal-body">
-      <button id="addSecretaryBtn" class="btn btn-primary" style="margin-bottom:14px;">➕ إضافة حساب جديد</button>
-      <div id="secretariesList" class="secretaries-list"></div>
-      <div id="noSecretaries" class="empty-state hidden">
-        <span class="empty-emoji">👤</span>
-        <p>لا يوجد سكرتارية مسجلين محليًا بعد</p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ============ ADD / EDIT SECRETARY ACCOUNT FORM MODAL ============ -->
-<div id="secretaryFormModal" class="modal-overlay hidden" aria-hidden="true">
-  <div class="modal-box edit-box">
-    <div class="modal-header">
-      <h2 id="secretaryFormTitle">إضافة حساب جديد</h2>
-      <button class="modal-close" id="secretaryFormModalClose" aria-label="إغلاق">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-group">
-        <label>اسم صاحب الحساب</label>
-        <input type="text" class="input-field" id="secretaryFormName" placeholder="اكتب الاسم بالكامل" autocomplete="off">
-      </div>
-      <div class="form-group">
-        <label>الرقم السري (4 أرقام)</label>
-        <input type="text" class="input-field" id="secretaryFormPin" placeholder="مثال: 1234" inputmode="numeric" maxlength="4" autocomplete="off">
-      </div>
-      <div class="form-group">
-        <label>الدور</label>
-        <select class="input-field select-field" id="secretaryFormRole">
-          <option value="secretary">سكرتارية</option>
-          <option value="master">مدير المركز</option>
-        </select>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="cancelSecretaryFormBtn">إلغاء</button>
-      <button class="btn btn-primary" id="saveSecretaryFormBtn">💾 حفظ الحساب</button>
-    </div>
-  </div>
-</div>
-
-<!-- ============ EDIT SECRETARY PERMISSIONS MODAL ============ -->
-<div id="secretaryPermsModal" class="modal-overlay hidden" aria-hidden="true">
-  <div class="modal-box edit-box">
-    <div class="modal-header">
-      <h2>صلاحيات المجموعات</h2>
-      <button class="modal-close" id="secretaryPermsModalClose" aria-label="إغلاق">✕</button>
-    </div>
-    <div class="modal-body">
-      <p class="edit-student-name" id="secretaryPermsName"></p>
-      <div id="secretaryGroupsChecklist" class="groups-checklist"></div>
-      <div id="noGroupsForPerms" class="empty-state hidden">
-        <span class="empty-emoji">🏷️</span>
-        <p>لا توجد مجموعات متاحة بعد — يجب مزامنة الإعدادات أولًا</p>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="cancelSecretaryPermsBtn">إلغاء</button>
-      <button class="btn btn-primary" id="saveSecretaryPermsBtn">💾 حفظ الصلاحيات</button>
-    </div>
-  </div>
-</div>
-
-<!-- ============ SECRETARY CARD TEMPLATE (Manage Secretaries modal) ============ -->
-<template id="secretaryCardTemplate">
-  <article class="secretary-card" data-id="">
-    <div class="secretary-card-head">
-      <div class="student-avatar small"></div>
-      <div class="student-meta">
-        <h3 class="student-name" data-role="secName"></h3>
-        <div class="student-tags">
-          <span class="tag tag-group" data-role="secRole"></span>
-          <span class="tag tag-id" data-role="secGroupsCount"></span>
-        </div>
-      </div>
-      <span class="sync-mini-badge" data-role="secSyncBadge"></span>
-    </div>
-    <div class="secretary-card-actions">
-      <button class="btn btn-ghost btn-small" data-action="edit-perms">🏷️ المجموعات المسموحة</button>
-      <button class="btn btn-ghost btn-small" data-action="edit-account">✏️ تعديل الحساب</button>
-    </div>
-  </article>
-</template>
 
 <script src="db.js"></script>
 <script src="app.js"></script>
