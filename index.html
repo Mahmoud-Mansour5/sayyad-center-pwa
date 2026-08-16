@@ -230,6 +230,11 @@
       <div class="student-avatar"></div>
       <div class="student-meta">
         <h3 class="student-name"></h3>
+        <div class="student-sub-meta" data-role="subMeta">
+          <span class="student-branch" data-role="studentBranch"></span>
+          <span class="student-sub-sep" data-role="subSep">•</span>
+          <span class="student-phone" data-role="studentPhone"></span>
+        </div>
         <div class="student-tags">
           <span class="tag tag-id">#<span class="student-id"></span></span>
           <span class="tag tag-group"></span>
@@ -384,6 +389,7 @@
 </div>
 
 <!-- ============ ADD STUDENT MODAL ============ -->
+<!-- ============ ADD STUDENT MODAL ============ -->
 <div id="addStudentModal" class="modal-overlay hidden" aria-hidden="true">
   <div class="modal-box edit-box">
     <div class="modal-header">
@@ -391,30 +397,36 @@
       <button class="modal-close" id="addStudentModalClose" aria-label="إغلاق">✕</button>
     </div>
     <div class="modal-body">
+      
+      <!-- الصف الأول: السنتر والمرحلة -->
+      <div class="form-row">
+        <div class="form-group">
+          <label>السنتر (الفرع)</label>
+          <select class="input-field select-field" id="newStudentBranch">
+            <option value="">اختر السنتر</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>المرحلة الدراسية</label>
+          <select class="input-field select-field" id="newStudentYear">
+            <option value="">اختر المرحلة</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- الصف الثاني: اسم الطالب -->
       <div class="form-group">
         <label>اسم الطالب</label>
         <input type="text" class="input-field" id="newStudentName" placeholder="اكتب اسم الطالب بالكامل" autocomplete="off">
       </div>
+
+      <!-- الصف الثالث: هاتف ولي الأمر -->
       <div class="form-group">
         <label>رقم هاتف ولي الأمر</label>
         <input type="tel" class="input-field" id="newStudentPhone" placeholder="01xxxxxxxxx" inputmode="tel" autocomplete="off">
       </div>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label>الصف الدراسي</label>
-          <select class="input-field select-field" id="newStudentYear">
-            <option value="">اختر الصف</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>الفرع</label>
-          <select class="input-field select-field" id="newStudentBranch">
-            <option value="">اختر الفرع</option>
-          </select>
-        </div>
-      </div>
-
+      <!-- الصف الرابع: اليوم والموعد -->
       <div class="form-row">
         <div class="form-group">
           <label>اليوم</label>
@@ -430,11 +442,12 @@
         </div>
       </div>
 
-      <!-- Smart ID preview (Change #2) -->
+      <!-- معاينة الكود الذكي -->
       <div class="id-preview" id="idPreview">
         <span class="id-preview-label">كود الطالب المتوقع:</span>
         <span class="id-preview-value" id="idPreviewValue">—</span>
       </div>
+      
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="cancelAddStudentBtn">إلغاء</button>

@@ -7,11 +7,13 @@
  *   No secretaries store; PIN is hardcoded to ADMIN_PIN ('1234').
  *   Session persisted in localStorage (not secretaryId).
  *
- * Change #2 — Smart Student ID Generation by Year:
- *   - "ابتدائي"  → IDs start at 1000
- *   - "إعدادي"   → IDs start at 2000
- *   - "ثانوي"    → IDs start at 3000
- *   Max existing ID in that range + 1.
+ * Change #2 — Smart Student ID Generation by Branch + Year (Dynamic Ranges):
+ *   Each branch (سنتر) owns a dedicated 200-number range, sub-divided
+ *   internally per school stage/year. See BRANCH_YEAR_RANGES below.
+ *   The system looks up the highest ID actually used inside the matching
+ *   branch+year sub-range and hands the new student the next number.
+ *   Branch/year combos with no configured range fall back to the legacy
+ *   stage-based ranges (ابتدائي 1000s / إعدادي 2000s / ثانوي 3000s).
  *
  * Change #3 — Two-Step Quick Attendance (no غائب):
  *   Step 1: Click "حاضر" → instant DB draft, green banner, unlock send btn.
@@ -40,7 +42,8 @@
     ADMIN_PIN: '1234',
     PIN_LENGTH: 4,
 
-    // Change #2: ID range bases per school stage
+    // Change #2 (legacy fallback): ID range bases per school stage,
+    // used only when a branch+year combo has no custom range defined below.
     ID_BASE_PRIMARY:     1000,  // ابتدائي
     ID_BASE_PREPARATORY: 2000,  // إعدادي
     ID_BASE_SECONDARY:   3000,  // ثانوي
@@ -57,7 +60,7 @@
 
   // Fallback option lists if settings store is empty (first offline install).
   const FALLBACK_SETTINGS = {
-    branches: ['الفرع الرئيسي'],
+    branches: ['الفرع الرئيسي', 'سنتر السرايا'],
     years: [
       'الصف الأول الابتدائي',  'الصف الثاني الابتدائي',  'الصف الثالث الابتدائي',
       'الصف الرابع الابتدائي', 'الصف الخامس الابتدائي', 'الصف السادس الابتدائي',
@@ -67,6 +70,23 @@
     days:  ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'],
     times: ['04:00 م', '06:00 م', '08:00 م'],
   };
+
+  /**
+   * Change #2 — Custom ID ranges per branch (سنتر) and stage (مرحلة).
+   * -------------------------------------------------------------
+   * Each branch is allotted a block of 200 numbers, split internally
+   * per year/stage. Add or edit branches/years here as new centers open.
+   *
+   * Example (as specified): سنتر السرايا owns 200–400, split as:
+   *   الصف الأول الإعدادي  → 200–269
+   *   الصف الثاني الإعدادي → 270–329
+   *   الصف الثالث الإعدادي → 330–400
+   *
+   * Any branch/year combination NOT listed here automatically falls back
+   * to the legacy stage-based ranges (getIdBaseForYear) so nothing breaks
+   * for branches/years that haven't been configured yet.
+   */
+ 
 
   /* ===================================================================
      STATE
@@ -149,6 +169,16 @@
     if ('vibrate' in navigator) {
       try { navigator.vibrate(pattern); } catch (_) { /* noop */ }
     }
+  }
+
+  function formatPhoneDisplay(phone) {
+    if (!phone) return '';
+    // 01012345678 → 010 123 45678 (light grouping for readability)
+    const digits = String(phone).replace(/\D/g, '');
+    if (digits.length === 11) {
+      return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+    }
+    return digits;
   }
 
   function buildGroupLabel(year, branch) {
@@ -512,6 +542,7 @@
 
     // Change #2: update ID preview live when year changes
     els.newStudentYear.addEventListener('change', updateIdPreview);
+    els.newStudentBranch.addEventListener('change', updateIdPreview); // Change #2: react to branch too
   }
 
   /**
@@ -817,6 +848,16 @@
     node.querySelector('.student-id').textContent     = student.id;
     node.querySelector('.tag-group').textContent      = student.group || '—';
 
+    // اسم السنتر ورقم هاتف ولي الأمر تحت اسم الطالب مباشرة
+    const branchEl = node.querySelector('[data-role="studentBranch"]');
+    const phoneEl  = node.querySelector('[data-role="studentPhone"]');
+    const subSep   = node.querySelector('[data-role="subSep"]');
+    const hasBranch = !!student.branch;
+    const hasPhone  = !!student.phone;
+    branchEl.textContent = hasBranch ? student.branch : '';
+    phoneEl.textContent  = hasPhone ? formatPhoneDisplay(student.phone) : '';
+    subSep.classList.toggle('hidden', !(hasBranch && hasPhone));
+
     if (student.syncStatus === 'pending_creation') {
       const tags = node.querySelector('.student-tags');
       const pendingTag = document.createElement('span');
@@ -1063,24 +1104,103 @@
     return CONFIG.ID_BASE_PRIMARY;
   }
 
-  function generateNextStudentId(year) {
-    const base    = getIdBaseForYear(year);
-    const rangeEnd = base + 999; // e.g. 1000–1999 for primary
+  /**
+   * Looks up a custom {start, end} range for a given branch + year, if one
+   * has been configured in BRANCH_YEAR_RANGES. Returns null otherwise so
+   * the caller can fall back to the legacy stage-based range.
+   */
+  /**
+   * Change #2 — Smart Dynamic ID Generation
+   * يولد النطاقات ديناميكياً بناءً على ترتيب الفروع والمراحل في الإعدادات
+   */
+  /**
+   * Change #2 — Smart Dynamic ID Generation
+   * يولد النطاقات ديناميكياً بناءً على ترتيب الفروع والمراحل في الإعدادات
+   */
+  function buildDynamicRanges() {
+    const ranges = {};
+    // استخدام الصيغة الآمنة بدلاً منعلامة الاستفهام
+    const branches = (state.settings && state.settings.branches) ? state.settings.branches : FALLBACK_SETTINGS.branches;
+    const years = (state.settings && state.settings.years) ? state.settings.years : FALLBACK_SETTINGS.years;
+    
+    const RANGE_SIZE_PER_BRANCH = 200; // 200 رقم لكل فرع
+    const BASE_START_ID = 200; // أول فرع يبدأ من رقم 200
 
-    let maxId = base - 1;
+    if (!branches || !years || years.length === 0) return ranges;
+
+    // حساب عدد الأرقام لكل مرحلة داخل الفرع الواحد
+    const sizePerYear = Math.floor(RANGE_SIZE_PER_BRANCH / years.length);
+
+    branches.forEach((branch, branchIndex) => {
+      ranges[branch] = {};
+      const branchStart = BASE_START_ID + (branchIndex * RANGE_SIZE_PER_BRANCH);
+      
+      years.forEach((year, yearIndex) => {
+        const yearStart = branchStart + (yearIndex * sizePerYear);
+        // المرحلة الأخيرة تأخذ ما تبقى من النطاق لضمان تغطية الـ 200 رقم بالكامل
+        const yearEnd = (yearIndex === years.length - 1) 
+                        ? (branchStart + RANGE_SIZE_PER_BRANCH - 1) 
+                        : (yearStart + sizePerYear - 1);
+        
+        ranges[branch][year] = { start: yearStart, end: yearEnd };
+      });
+    });
+
+    return ranges;
+  }
+  /**
+   * يبحث عن النطاق المخصص للفرع والمرحلة باستخدام الدالة الديناميكية.
+   */
+  function getCustomRange(branch, year) {
+    const dynamicRanges = buildDynamicRanges();
+    const branchRanges = dynamicRanges[branch];
+    if (!branchRanges) return null;
+    return branchRanges[year] || null;
+  }
+
+ function generateNextStudentId(branch, year) {
+    const customRange = getCustomRange(branch, year);
+
+    let start, end;
+    if (customRange) {
+      // تم العثور على النطاق الديناميكي المخصص
+      start = customRange.start;
+      end   = customRange.end;
+    } else {
+      // Fallback: legacy stage-based range (لا يوجد فرع أو مرحلة مسجلة)
+      start = getIdBaseForYear(year);
+      end   = start + 999;
+    }
+
+    let maxId = start - 1;
     state.students.forEach((s) => {
       const numId = parseInt(s.id, 10);
-      if (!isNaN(numId) && numId >= base && numId <= rangeEnd && numId > maxId) {
+      if (!isNaN(numId) && numId >= start && numId <= end && numId > maxId) {
         maxId = numId;
       }
     });
-    return String(maxId + 1);
+
+    const nextId = maxId + 1;
+    return nextId > end ? null : String(nextId); // null = range exhausted
   }
 
+
+
   function updateIdPreview() {
-    const year  = els.newStudentYear.value;
-    const nextId = year ? generateNextStudentId(year) : '—';
-    els.idPreviewValue.textContent = nextId;
+    const branch = els.newStudentBranch.value;
+    const year   = els.newStudentYear.value;
+
+    if (!branch || !year) {
+      els.idPreviewValue.textContent = '—';
+      return;
+    }
+
+    const nextId = generateNextStudentId(branch, year);
+    if (nextId === null) {
+      els.idPreviewValue.textContent = 'انتهى النطاق المخصص!';
+    } else {
+      els.idPreviewValue.textContent = nextId;
+    }
   }
 
   /* ===================================================================
@@ -1143,7 +1263,12 @@
     }
 
     const group  = buildGroupLabel(year, branch);
-    const nextId = generateNextStudentId(year); // Change #2
+    const nextId = generateNextStudentId(branch, year); // Change #2
+
+    if (nextId === null) {
+      showToast('⚠️ انتهى النطاق المخصص لهذا السنتر/المرحلة، برجاء مراجعة الإدارة', 'error');
+      return;
+    }
 
     const newStudent = {
       id:          nextId,
