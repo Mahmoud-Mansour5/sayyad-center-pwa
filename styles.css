@@ -411,8 +411,43 @@ input, textarea, select { border: none; outline: none; }
 
 .student-meta { flex: 1; min-width: 0; }
 .student-name { font-size: 15px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.student-tags { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 
+/* --------------------------------------------------- */
+/* التصميم المودرن للسنتر ورقم الهاتف في كارت الطالب */
+.student-sub-meta {
+  display: flex; 
+  align-items: center; 
+  gap: 8px; 
+  margin-top: 6px;
+  font-size: 11.5px; 
+  font-weight: 700; 
+  color: var(--text-secondary);
+  flex-wrap: wrap; /* بيسمح للرقم ينزل سطر جديد بشياكة لو الشاشة صغيرة */
+}
+.student-sub-meta:empty { display: none; }
+
+/* تحويل السنتر والرقم لشكل إطارات (Badges) */
+.student-branch, 
+.student-phone { 
+  background: var(--bg-card-alt);
+  border: 1px solid var(--border-color);
+  padding: 4px 10px;
+  border-radius: 8px;
+  white-space: nowrap; /* بيمنع الكلمة أو الرقم من الانقسام نهائياً */
+}
+
+/* إخفاء النقطة الفاصلة لأن شكل الإطارات الجديد مش محتاجها */
+.student-sub-sep { 
+  display: none !important; 
+}
+
+.student-phone { 
+  direction: ltr; 
+  letter-spacing: 0.5px; /* مسافة خفيفة بين الأرقام عشان تكون أوضح للعين */
+}
+/* --------------------------------------------------- */
+
+.student-tags { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 .tag {
   font-size: 10.5px; font-weight: 700; padding: 2px 9px;
   border-radius: var(--radius-round);
