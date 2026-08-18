@@ -884,3 +884,208 @@ body:not(.light-theme) {
 /* Light-mode id-preview text fix */
 body.light-theme .id-preview-label { color: var(--primary-dark); }
 body.light-theme .id-preview-value { color: var(--primary); }
+/* =========================================================
+   TASK 2 & 3 — REPORTS VIEW (تصميم صفحة التقارير)
+   ========================================================= */
+
+/* شريط التاريخ أعلى التقارير */
+.reports-date-badge {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--bg-card-alt);
+  padding: 6px 14px;
+  border-radius: var(--radius-round);
+  border: 1px solid var(--border-color);
+}
+
+/* شبكة كروت التقارير */
+.report-cards-list {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 700px) {
+  .report-cards-list { grid-template-columns: 1fr 1fr; }
+}
+
+/* الكارت نفسه */
+.report-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.report-card:hover { box-shadow: var(--shadow-md); }
+
+/* هيدر الكارت (السنتر والصف والزرار) */
+.report-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.report-card-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.report-card-title {
+  font-size: 14.5px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.report-card-sub {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.report-expand-btn {
+  background: var(--primary-light);
+  color: var(--primary-dark);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+/* الإحصائيات (الإجمالي - الحضور - الغياب) */
+.report-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.report-metric {
+  background: var(--bg-card-alt);
+  border-radius: var(--radius-md);
+  padding: 12px 6px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border-color);
+}
+.report-metric-total { border-color: rgba(79, 109, 245, 0.2); background: var(--primary-light); }
+.report-metric-total .report-metric-value { color: var(--primary-dark); }
+
+.report-metric-attended { border-color: rgba(16, 185, 129, 0.2); background: var(--success-light); }
+.report-metric-attended .report-metric-value { color: var(--accent-green); }
+
+.report-metric-absent { border-color: rgba(245, 158, 11, 0.2); background: var(--warning-light); }
+.report-metric-absent .report-metric-value { color: #b47000; }
+
+.report-metric-value {
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1;
+}
+.report-metric-label {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-secondary);
+}
+
+/* قسم أسماء الطلاب المصغر داخل الكارت */
+.report-attendee-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px dashed var(--border-color);
+  padding-top: 14px;
+}
+
+.report-mini-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card-alt);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+}
+.report-mini-search-input {
+  flex: 1;
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+  min-width: 0;
+  color: var(--text-primary);
+}
+.report-mini-search-input::placeholder { color: var(--text-muted); }
+
+/* القائمة القابلة للتمرير (Scroll) */
+.report-attendee-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+/* ستايل الطالب الواحد في التقرير */
+.report-attendee-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(0,0,0,0.03);
+}
+body:not(.light-theme) .report-attendee-item { border-bottom-color: rgba(255,255,255,0.03); }
+.report-attendee-item:last-child { border-bottom: none; }
+
+.report-attendee-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--border-strong);
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.report-attendee-name {
+  font-size: 13px;
+  font-weight: 700;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.report-attendee-id {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-muted);
+}
+
+.report-attendee-empty {
+  text-align: center;
+  padding: 20px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* النافذة المنبثقة الكبيرة (Modal) */
+.report-expand-box {
+  max-width: 540px;
+}
+.report-expand-full-list {
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-card);
+}

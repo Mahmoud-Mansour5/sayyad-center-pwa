@@ -1,0 +1,237 @@
+/**
+ * Google Apps Script API - I.M Techno (V5 - Exact Match Automated Absentees)
+ */
+
+function doGet(e) {
+  var action = e ? e.parameter.action : '';
+  
+  if (action === 'bootstrap') {
+    return ContentService.createTextOutput(JSON.stringify(getBootstrapData()))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify({ status: 'ok', message: 'API is running perfectly.' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    var contents = e.postData.contents;
+    var data = JSON.parse(contents);
+    var type = data.type;
+    
+    if (type === 'new_student') {
+      addStudent(data.student);
+    } else if (type === 'record') {
+      addLogRecord(data);
+    } else if (type === 'finalize_group') {
+      // إشارة الجرد الأوتوماتيكي اللي بتيجي من الفرونت إند
+      finalizeGroupAttendance(data);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function getBootstrapData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1. جلب بيانات الطلاب
+  var studentsSheet = ss.getSheetByName('Students');
+  var studentsData = [];
+  if (studentsSheet) {
+    var sValues = studentsSheet.getDataRange().getDisplayValues();
+    for (var i = 1; i < sValues.length; i++) {
+      if (sValues[i][0]) {
+        studentsData.push({
+          id: String(sValues[i][0]),
+          name: String(sValues[i][1] || ''),
+          phone: String(sValues[i][2] || ''),
+          year: String(sValues[i][3] || ''),
+          branch: String(sValues[i][4] || ''),
+          day: String(sValues[i][5] || ''),
+          time: String(sValues[i][6] || ''),
+          group: String(sValues[i][7] || '')
+        });
+      }
+    }
+  }
+  
+  // 2. جلب الإعدادات
+  var settingsSheet = ss.getSheetByName('Settings');
+  var settingsObj = { branches: [], years: [], days: [], times: [], groups: [] };
+  if (settingsSheet) {
+    var setValues = settingsSheet.getDataRange().getDisplayValues();
+    for (var j = 1; j < setValues.length; j++) {
+      if (setValues[j][0]) settingsObj.branches.push(String(setValues[j][0]));
+      if (setValues[j][1]) settingsObj.years.push(String(setValues[j][1]));
+      if (setValues[j][2]) settingsObj.days.push(String(setValues[j][2]));
+      if (setValues[j][3]) settingsObj.times.push(String(setValues[j][3]));
+      if (setValues[j][4]) settingsObj.groups.push(String(setValues[j][4]));
+    }
+  }
+  
+  // تم حذف السكرتارية بالكامل
+  
+  return {
+    students: studentsData,
+    settings: settingsObj
+  };
+}
+
+function addStudent(student) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Students');
+  if (!sheet) throw new Error("لم يتم العثور على صفحة Students");
+  
+  var values = sheet.getDataRange().getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0]) === String(student.id)) {
+      return; 
+    }
+  }
+  
+  sheet.appendRow([
+    "'" + (student.id || ''),
+    student.name,
+    "'" + (student.phone || ''),
+    student.year || '',
+    student.branch || '',
+    student.day || '',
+    student.time || '',
+    student.group || ''
+  ]);
+}
+
+function addLogRecord(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Logs');
+  if (!sheet) throw new Error("لم يتم العثور على صفحة Logs");
+  
+  var colB = sheet.getRange("B:B").getValues();
+  var realLastRow = 0;
+  for (var i = 0; i < colB.length; i++) {
+    if (colB[i][0] !== "") {
+      realLastRow = i + 1;
+    }
+  }
+  
+  var rowData = [
+    data.recordId || '',
+    data.studentId || '',
+    data.studentName || '',
+    data.group || '',
+    'present', // الحضور دائماً present
+    data.homeworkGrade !== null && data.homeworkGrade !== undefined ? data.homeworkGrade : '',
+    data.homeworkMax !== null && data.homeworkMax !== undefined ? data.homeworkMax : '',
+    data.examGrade !== null && data.examGrade !== undefined ? data.examGrade : '',
+    data.examMax !== null && data.examMax !== undefined ? data.examMax : '',
+    data.notes || '',
+    'Admin', // تم استبدال اسم السكرتير
+    'Admin', // تم استبدال اسم المعتمد
+    'Approved',
+    data.dateKey || '',
+    data.createdAt ? new Date(data.createdAt) : new Date(),
+    data.approvedAt ? new Date(data.approvedAt) : new Date()
+  ];
+  
+  sheet.getRange(realLastRow + 1, 1, 1, rowData.length).setValues([rowData]);
+}
+
+/**
+ * الدالة الذكية لجرد الغياب بالملي (بالصف، الفرع، اليوم، الموعد)
+ */
+function finalizeGroupAttendance(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var studentsSheet = ss.getSheetByName('Students');
+  var logsSheet = ss.getSheetByName('Logs');
+  var absenteesSheet = ss.getSheetByName('Absentees');
+  
+  if (!studentsSheet || !logsSheet || !absenteesSheet) {
+    throw new Error("بعض صفحات الشيت مفقودة.");
+  }
+  
+  var targetYear = String(data.year || '').trim();
+  var targetGroup = String(data.group || '').trim();
+  var targetDay = String(data.day || '').trim();
+  var targetTime = String(data.time || '').trim();
+  var targetDateKey = String(data.dateKey || '').trim();
+  
+  // 1. فلترة الطلاب المطابقين 100% للشريحة دي
+  var sValues = studentsSheet.getDataRange().getDisplayValues();
+  var expectedStudents = {}; 
+  
+  for (var i = 1; i < sValues.length; i++) {
+    var sId = String(sValues[i][0]).trim();
+    var sName = String(sValues[i][1]).trim();
+    var sPhone = String(sValues[i][2]).trim();
+    var sYear = String(sValues[i][3]).trim();
+    var sDay = String(sValues[i][5]).trim();
+    var sTime = String(sValues[i][6]).trim();
+    var sGroup = String(sValues[i][7]).trim(); 
+    
+    // شرط التطابق الكامل
+    if (sId && sYear === targetYear && sGroup === targetGroup && sDay === targetDay && sTime === targetTime) {
+      expectedStudents[sId] = { name: sName, phone: sPhone, group: sGroup };
+    }
+  }
+  
+  // 2. فلترة اللي حضروا فعلاً من نفس الشريحة دي النهارده
+  var lValues = logsSheet.getDataRange().getDisplayValues();
+  var attendedStudents = {};
+  
+  for (var j = 1; j < lValues.length; j++) {
+    var lId = String(lValues[j][1]).trim(); // كود الطالب
+    var lDate = String(lValues[j][13]).trim(); // التاريخ
+    
+    // لو الطالب ده متسجل النهارده وموجود في قائمة المتوقع حضورهم، نعلمه إنه حضر
+    if (lDate === targetDateKey && expectedStudents[lId]) {
+      attendedStudents[lId] = true;
+    }
+  }
+  
+  // 3. فلترة شيت الغياب عشان منكررش اللي اتسجلوا غايبين قبل كده لو دوست اعتماد مرتين
+  var aValues = absenteesSheet.getDataRange().getDisplayValues();
+  var alreadyAbsent = {};
+  
+  for (var k = 1; k < aValues.length; k++) {
+    var aId = String(aValues[k][0]).trim();
+    var aDate = String(aValues[k][4]).trim();
+    
+    if (aDate === targetDateKey && expectedStudents[aId]) {
+      alreadyAbsent[aId] = true;
+    }
+  }
+  
+  // 4. استخراج الغائبين النهائيين
+  var rowsToAdd = [];
+  for (var expectedId in expectedStudents) {
+    if (!attendedStudents[expectedId] && !alreadyAbsent[expectedId]) {
+      var sData = expectedStudents[expectedId];
+      rowsToAdd.push([
+        "'" + expectedId,
+        sData.name,
+        "'" + sData.phone,
+        sData.group,
+        targetDateKey,
+        new Date()
+      ]);
+    }
+  }
+  
+  // 5. كتابة الغائبين في شيت Absentees
+  if (rowsToAdd.length > 0) {
+    var colA = absenteesSheet.getRange("A:A").getValues();
+    var realLastRow = 0;
+    for (var row = 0; row < colA.length; row++) {
+      if (colA[row][0] !== "") {
+        realLastRow = row + 1;
+      }
+    }
+    absenteesSheet.getRange(realLastRow + 1, 1, rowsToAdd.length, rowsToAdd[0].length).setValues(rowsToAdd);
+  }
+}

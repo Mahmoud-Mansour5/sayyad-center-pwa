@@ -98,7 +98,8 @@
         <button id="logoutBtn" class="icon-btn" title="تسجيل الخروج" aria-label="تسجيل الخروج">🚪</button>
       </div>
     </div>
-    <!-- Tab navigation: student attendance view ↔ approvals dashboard -->
+
+    <!-- ══ TASK 2 — Tab 1: Tab navigation: 3 tabs now ══ -->
     <div class="header-tabs">
       <button class="header-tab active" id="tabAttendance" data-tab="attendance">
         <span>👥</span> الطلاب
@@ -106,6 +107,10 @@
       <button class="header-tab" id="tabApprovals" data-tab="approvals">
         <span>⏳</span> طابور الاعتماد
         <span class="tab-badge hidden" id="pendingTabBadge">0</span>
+      </button>
+      <!-- ══ NEW: Reports tab ══ -->
+      <button class="header-tab" id="tabReports" data-tab="reports">
+        <span>📊</span> التقارير
       </button>
     </div>
   </header>
@@ -178,13 +183,27 @@
       <div class="section-header">
         <h2>طابور اعتماد السجلات</h2>
         <div class="section-header-actions">
-          <button id="exportExcelBtn" class="btn btn-small btn-ghost">📊 تصدير Excel</button>
+          <!-- ══ TASK 2 — Approvals 1: "Export Excel" button REMOVED ══ -->
           <button id="approveAllBtn" class="btn btn-small btn-ghost hidden">اعتماد الكل</button>
         </div>
       </div>
 
-      <!-- Drill-down filter dropdowns (Change #4) -->
+      <!-- ══ TASK 2 — Approvals 2: Search bar inside Approvals view ══ -->
+      <div class="approvals-search-bar">
+        <span class="search-icon">🔍</span>
+        <input type="search" id="approvalsSearch" placeholder="ابحث بالاسم أو رقم الطالب..." autocomplete="off" inputmode="search">
+        <button id="clearApprovalsSearchBtn" class="clear-search-btn hidden" aria-label="مسح البحث">✕</button>
+      </div>
+
+      <!-- ══ TASK 2 — Approvals 3: Filter order is now Branch → Year → Day → Time ══ -->
       <div class="approval-filters" id="approvalFilters">
+        <!-- NEW: Branch filter comes first -->
+        <div class="filter-group">
+          <label class="filter-label">السنتر</label>
+          <select class="input-field select-field filter-select" id="filterBranch">
+            <option value="">— كل السنتر —</option>
+          </select>
+        </div>
         <div class="filter-group">
           <label class="filter-label">الصف</label>
           <select class="input-field select-field filter-select" id="filterYear">
@@ -213,17 +232,33 @@
     </section>
   </main>
 
+  <!-- ══════════════════════════════════════════════════
+       TASK 2 — REPORTS VIEW (new main container)
+       Shows today's approved/synced records grouped by
+       Branch | Year | Day | Time. Auto-resets at midnight.
+       ══════════════════════════════════════════════════ -->
+  <main id="reportsView" class="view hidden">
+
+    <div class="section-header" style="margin-bottom:18px;">
+      <h2>📊 تقارير اليوم</h2>
+      <span class="reports-date-badge" id="reportsTodayLabel"></span>
+    </div>
+
+    <!-- Report cards are injected here by renderReportsView() -->
+    <div id="reportCardsList" class="report-cards-list"></div>
+
+    <div id="noReports" class="empty-state hidden">
+      <span class="empty-emoji">📋</span>
+      <p>لا توجد مجموعات معتمدة حتى الآن اليوم</p>
+      <p class="muted" style="margin-top:6px; font-size:12px;">اعتمد السجلات من تبويب "طابور الاعتماد" لتظهر هنا</p>
+    </div>
+  </main>
+
   <!-- ===== BOTTOM TOAST CONTAINER ===== -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 </div>
 
 <!-- ============ STUDENT CARD TEMPLATE ============ -->
-<!--
-  Two-step attendance (Change #3):
-  - Only "حاضر" button; no "غائب" button.
-  - Clicking حاضر: saves draft + shows green confirmation banner.
-  - Save button text is "إرسال للاعتماد"; click upgrades draft→pending.
--->
 <template id="studentCardTemplate">
   <article class="student-card" data-id="">
     <div class="student-card-head">
@@ -266,7 +301,7 @@
           <div class="grade-pair">
             <input type="number" class="input-field" data-field="homeworkGrade" min="0" placeholder="الدرجة" inputmode="numeric">
             <span class="grade-sep">/</span>
-            <input type="number" class="input-field grade-max-field" data-field="homeworkMax" min="1" placeholder="من" value="20" inputmode="numeric">
+            <input type="number" class="input-field grade-max-field" data-field="homeworkMax" min="1" placeholder="من" value="10" inputmode="numeric">
           </div>
         </div>
         <div class="form-group">
@@ -274,7 +309,7 @@
           <div class="grade-pair">
             <input type="number" class="input-field" data-field="examGrade" min="0" placeholder="الدرجة" inputmode="numeric">
             <span class="grade-sep">/</span>
-            <input type="number" class="input-field grade-max-field" data-field="examMax" min="1" placeholder="من" value="20" inputmode="numeric">
+            <input type="number" class="input-field grade-max-field" data-field="examMax" min="1" placeholder="من" value="10" inputmode="numeric">
           </div>
         </div>
       </div>
@@ -284,7 +319,6 @@
       </div>
     </div>
 
-    <!-- Step 2: "إرسال للاعتماد" — disabled until step 1 (draft) is done -->
     <button class="btn btn-save" data-action="save" disabled>
       <span class="save-icon">📤</span> إرسال للاعتماد
     </button>
@@ -329,6 +363,84 @@
   </article>
 </template>
 
+<!-- ══════════════════════════════════════════════════
+     TASK 2 — REPORT CARD TEMPLATE
+     One card per unique Branch|Year|Day|Time group.
+     ══════════════════════════════════════════════════ -->
+<template id="reportCardTemplate">
+  <div class="report-card">
+
+    <!-- Card header: group identity -->
+    <div class="report-card-header">
+      <div class="report-card-title-block">
+        <h3 class="report-card-title" data-role="groupTitle"></h3>
+        <span class="report-card-sub" data-role="groupSub"></span>
+      </div>
+      <button class="btn btn-small btn-ghost report-expand-btn" data-action="expand">
+        توسيع 🔍
+      </button>
+    </div>
+
+    <!-- Metrics row -->
+    <div class="report-metrics">
+      <div class="report-metric report-metric-total">
+        <span class="report-metric-value" data-role="metricTotal">0</span>
+        <span class="report-metric-label">إجمالي الطلاب</span>
+      </div>
+      <div class="report-metric report-metric-attended">
+        <span class="report-metric-value" data-role="metricAttended">0</span>
+        <span class="report-metric-label">حاضر</span>
+      </div>
+      <div class="report-metric report-metric-absent">
+        <span class="report-metric-value" data-role="metricAbsent">0</span>
+        <span class="report-metric-label">غائب</span>
+      </div>
+    </div>
+
+    <!-- Attendee list with mini search -->
+    <div class="report-attendee-section">
+      <div class="report-mini-search">
+        <span class="search-icon">🔍</span>
+        <input type="search" class="report-mini-search-input" data-role="miniSearch"
+               placeholder="ابحث في الحاضرين..." autocomplete="off">
+      </div>
+      <div class="report-attendee-list" data-role="attendeeList"
+           style="max-height: 150px; overflow-y: auto;">
+        <!-- Attendee names injected here -->
+      </div>
+    </div>
+
+  </div>
+</template>
+
+<!-- ══════════════════════════════════════════════════
+     TASK 2 — EXPAND MODAL (Reports detail)
+     Shows full attendee list for one group.
+     ══════════════════════════════════════════════════ -->
+<div id="reportExpandModal" class="modal-overlay hidden" aria-hidden="true">
+  <div class="modal-box report-expand-box">
+    <div class="modal-header">
+      <h2 id="reportExpandTitle">الحاضرون</h2>
+      <button class="modal-close" id="reportExpandClose" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="muted" id="reportExpandSub" style="margin-bottom:12px;"></p>
+
+      <!-- Full-list search -->
+      <div class="approvals-search-bar" style="margin-bottom:12px;">
+        <span class="search-icon">🔍</span>
+        <input type="search" id="reportExpandSearch" placeholder="ابحث في القائمة..." autocomplete="off">
+      </div>
+
+      <!-- Metrics inside modal -->
+      <div class="report-metrics" id="reportExpandMetrics" style="margin-bottom:14px;"></div>
+
+      <!-- Scrollable full list -->
+      <div id="reportExpandList" class="report-expand-full-list"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ============ EDIT RECORD MODAL (from approvals queue) ============ -->
 <div id="editModal" class="modal-overlay hidden" aria-hidden="true">
   <div class="modal-box edit-box">
@@ -339,7 +451,6 @@
     <div class="modal-body">
       <p class="edit-student-name" id="editStudentName"></p>
 
-      <!-- In edit modal: attendance is always present (only present records exist now) -->
       <div class="edit-attendance-badge">
         <span class="summary-pill present-pill">✅ حاضر</span>
         <span class="muted" style="font-size:12px; margin-right:8px;">الحضور مسجّل بالفعل</span>
@@ -389,7 +500,6 @@
 </div>
 
 <!-- ============ ADD STUDENT MODAL ============ -->
-<!-- ============ ADD STUDENT MODAL ============ -->
 <div id="addStudentModal" class="modal-overlay hidden" aria-hidden="true">
   <div class="modal-box edit-box">
     <div class="modal-header">
@@ -398,7 +508,6 @@
     </div>
     <div class="modal-body">
       
-      <!-- الصف الأول: السنتر والمرحلة -->
       <div class="form-row">
         <div class="form-group">
           <label>السنتر (الفرع)</label>
@@ -414,19 +523,16 @@
         </div>
       </div>
 
-      <!-- الصف الثاني: اسم الطالب -->
       <div class="form-group">
         <label>اسم الطالب</label>
         <input type="text" class="input-field" id="newStudentName" placeholder="اكتب اسم الطالب بالكامل" autocomplete="off">
       </div>
 
-      <!-- الصف الثالث: هاتف ولي الأمر -->
       <div class="form-group">
         <label>رقم هاتف ولي الأمر</label>
         <input type="tel" class="input-field" id="newStudentPhone" placeholder="01xxxxxxxxx" inputmode="tel" autocomplete="off">
       </div>
 
-      <!-- الصف الرابع: اليوم والموعد -->
       <div class="form-row">
         <div class="form-group">
           <label>اليوم</label>
@@ -442,7 +548,6 @@
         </div>
       </div>
 
-      <!-- معاينة الكود الذكي -->
       <div class="id-preview" id="idPreview">
         <span class="id-preview-label">كود الطالب المتوقع:</span>
         <span class="id-preview-value" id="idPreviewValue">—</span>

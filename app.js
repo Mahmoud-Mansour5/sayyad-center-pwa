@@ -9,22 +9,24 @@
  *
  * Change #2 — Smart Student ID Generation by Branch + Year (Dynamic Ranges):
  *   Each branch (سنتر) owns a dedicated 200-number range, sub-divided
- *   internally per school stage/year. See BRANCH_YEAR_RANGES below.
- *   The system looks up the highest ID actually used inside the matching
- *   branch+year sub-range and hands the new student the next number.
- *   Branch/year combos with no configured range fall back to the legacy
- *   stage-based ranges (ابتدائي 1000s / إعدادي 2000s / ثانوي 3000s).
+ *   internally per school stage/year. See buildDynamicRanges() below.
  *
  * Change #3 — Two-Step Quick Attendance (no غائب):
  *   Step 1: Click "حاضر" → instant DB draft, green banner, unlock send btn.
  *   Step 2: Click "إرسال للاعتماد" → reads grades/notes, upgrades draft→pending.
  *
  * Change #4 — Drill-Down Approval Filters:
- *   Three cascading selects: Year → Day → Time.
+ *   Four cascading selects: Branch → Year → Day → Time.
  *   Populated from pending records only; "Approve All" only approves filtered set.
+ *   Search bar filters the rendered cards by student name or ID.
  *
  * Change #5 — No Absent Frontend State:
  *   All absent logic removed. Only 'present' records are created/sent.
+ *
+ * Task 2 & 3 — Reports Tab:
+ *   renderReportsView() groups today's approved/synced records by
+ *   Branch|Year|Day|Time, calculates total/attended/absent per group,
+ *   and renders interactive report cards with mini search + expand modal.
  * -------------------------------------------------------------
  */
 
@@ -36,7 +38,7 @@
      =================================================================== */
 
   const CONFIG = {
-    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycbwVV5tIHS-hI_v8ppRuIYgKOEu0pTccTQaieSADBBRfAPngNeCE31ky7Um6CfYzu3Wo/exec',
+    API_ENDPOINT: 'https://script.google.com/macros/s/AKfycby9DPOhphA6-BItkFoxlnF5QaURwHIldCRaqp0Junx-zvFe9le0dhc6N7_XN5myAZuz/exec',
 
     // Change #1: hardcoded admin PIN
     ADMIN_PIN: '1234',
@@ -51,8 +53,8 @@
     SYNC_RETRY_INTERVAL_MS: 30000,
     TOAST_DURATION_MS:      3200,
 
-    DEFAULT_HOMEWORK_MAX: 20,
-    DEFAULT_EXAM_MAX:     20,
+    DEFAULT_HOMEWORK_MAX: 10,
+    DEFAULT_EXAM_MAX:     10,
 
     THEME_STORAGE_KEY:   'sayyad_theme',
     SESSION_STORAGE_KEY: 'sayyad_session_active',
@@ -71,23 +73,6 @@
     times: ['04:00 م', '06:00 م', '08:00 م'],
   };
 
-  /**
-   * Change #2 — Custom ID ranges per branch (سنتر) and stage (مرحلة).
-   * -------------------------------------------------------------
-   * Each branch is allotted a block of 200 numbers, split internally
-   * per year/stage. Add or edit branches/years here as new centers open.
-   *
-   * Example (as specified): سنتر السرايا owns 200–400, split as:
-   *   الصف الأول الإعدادي  → 200–269
-   *   الصف الثاني الإعدادي → 270–329
-   *   الصف الثالث الإعدادي → 330–400
-   *
-   * Any branch/year combination NOT listed here automatically falls back
-   * to the legacy stage-based ranges (getIdBaseForYear) so nothing breaks
-   * for branches/years that haven't been configured yet.
-   */
- 
-
   /* ===================================================================
      STATE
      =================================================================== */
@@ -99,16 +84,23 @@
     settings:            {},
     searchQuery:         '',
     activeGroup:         'all',
-    activeTab:           'attendance',   // 'attendance' | 'approvals'
+    activeTab:           'attendance',   // 'attendance' | 'approvals' | 'reports'
     isSyncing:           false,
     isFetchingInitialData: false,
     editingRecordId:     null,
     pendingConfirmAction: null,
 
-    // Change #4: current approval filter values
-    approvalFilterYear: '',
-    approvalFilterDay:  '',
-    approvalFilterTime: '',
+    // Change #4: current approval filter values (now includes branch)
+    approvalFilterBranch: '',
+    approvalFilterYear:   '',
+    approvalFilterDay:    '',
+    approvalFilterTime:   '',
+
+    // Approvals search query
+    approvalsSearchQuery: '',
+
+    // Reports: the group key currently open in the expand modal
+    reportExpandGroupKey: null,
   };
 
   /* ===================================================================
@@ -173,7 +165,6 @@
 
   function formatPhoneDisplay(phone) {
     if (!phone) return '';
-    // 01012345678 → 010 123 45678 (light grouping for readability)
     const digits = String(phone).replace(/\D/g, '');
     if (digits.length === 11) {
       return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
@@ -246,10 +237,12 @@
 
     els.tabAttendance  = $('#tabAttendance');
     els.tabApprovals   = $('#tabApprovals');
+    els.tabReports     = $('#tabReports');          // Task 3 — new tab
     els.pendingTabBadge = $('#pendingTabBadge');
 
     els.attendanceView = $('#attendanceView');
     els.approvalsView  = $('#approvalsView');
+    els.reportsView    = $('#reportsView');          // Task 3 — new view
 
     els.studentSearch    = $('#studentSearch');
     els.clearSearchBtn   = $('#clearSearchBtn');
@@ -266,15 +259,34 @@
     els.approvalsList       = $('#approvalsList');
     els.noApprovals         = $('#noApprovals');
     els.approveAllBtn       = $('#approveAllBtn');
-    els.exportExcelBtn      = $('#exportExcelBtn');
 
-    // Change #4: drill-down filter dropdowns
-    els.filterYear = $('#filterYear');
-    els.filterDay  = $('#filterDay');
-    els.filterTime = $('#filterTime');
+    // Task 2 — Approvals search
+    els.approvalsSearch      = $('#approvalsSearch');
+    els.clearApprovalsSearch = $('#clearApprovalsSearchBtn');
+
+    // Change #4 (updated): drill-down filter dropdowns, now includes Branch
+    els.filterBranch = $('#filterBranch');
+    els.filterYear   = $('#filterYear');
+    els.filterDay    = $('#filterDay');
+    els.filterTime   = $('#filterTime');
 
     els.studentCardTemplate  = $('#studentCardTemplate');
     els.approvalCardTemplate = $('#approvalCardTemplate');
+    els.reportCardTemplate   = $('#reportCardTemplate');  // Task 3
+
+    // Reports view elements
+    els.reportCardsList   = $('#reportCardsList');
+    els.noReports         = $('#noReports');
+    els.reportsTodayLabel = $('#reportsTodayLabel');
+
+    // Reports expand modal
+    els.reportExpandModal   = $('#reportExpandModal');
+    els.reportExpandClose   = $('#reportExpandClose');
+    els.reportExpandTitle   = $('#reportExpandTitle');
+    els.reportExpandSub     = $('#reportExpandSub');
+    els.reportExpandSearch  = $('#reportExpandSearch');
+    els.reportExpandMetrics = $('#reportExpandMetrics');
+    els.reportExpandList    = $('#reportExpandList');
 
     // Edit modal
     els.editModal          = $('#editModal');
@@ -336,20 +348,29 @@
   }
 
   /* ===================================================================
-     TAB NAVIGATION
+     TAB NAVIGATION — Task 3: extended to support 3rd "reports" tab
      =================================================================== */
 
   function switchTab(tab) {
     state.activeTab = tab;
 
+    // Toggle tab button active states
     els.tabAttendance.classList.toggle('active', tab === 'attendance');
     els.tabApprovals.classList.toggle('active',  tab === 'approvals');
+    els.tabReports.classList.toggle('active',    tab === 'reports');
 
+    // Toggle view visibility
     els.attendanceView.classList.toggle('hidden', tab !== 'attendance');
     els.approvalsView.classList.toggle('hidden',  tab !== 'approvals');
+    els.reportsView.classList.toggle('hidden',    tab !== 'reports');
 
     if (tab === 'approvals') {
       renderApprovalsView();
+    }
+
+    // Task 3 — render reports on tab click (auto-reset logic lives inside)
+    if (tab === 'reports') {
+      renderReportsView();
     }
   }
 
@@ -465,11 +486,12 @@
     els.themeToggleBtn.addEventListener('click', toggleTheme);
     els.addStudentBtn.addEventListener('click', openAddStudentModal);
 
-    // Tab switching
+    // Tab switching — Task 3: third tab wired up
     els.tabAttendance.addEventListener('click', () => switchTab('attendance'));
     els.tabApprovals.addEventListener('click',  () => switchTab('approvals'));
+    els.tabReports.addEventListener('click',    () => switchTab('reports'));
 
-    // Search
+    // Attendance search
     els.studentSearch.addEventListener('input', (e) => {
       state.searchQuery = e.target.value.trim();
       els.clearSearchBtn.classList.toggle('hidden', state.searchQuery.length === 0);
@@ -481,6 +503,20 @@
       els.clearSearchBtn.classList.add('hidden');
       renderStudentsList();
       els.studentSearch.focus();
+    });
+
+    // ── Task 2 — Approvals in-view search ──
+    els.approvalsSearch.addEventListener('input', (e) => {
+      state.approvalsSearchQuery = e.target.value.trim().toLowerCase();
+      els.clearApprovalsSearch.classList.toggle('hidden', state.approvalsSearchQuery.length === 0);
+      renderApprovalsList();
+    });
+    els.clearApprovalsSearch.addEventListener('click', () => {
+      els.approvalsSearch.value  = '';
+      state.approvalsSearchQuery = '';
+      els.clearApprovalsSearch.classList.add('hidden');
+      renderApprovalsList();
+      els.approvalsSearch.focus();
     });
 
     // Group chips (delegated)
@@ -498,20 +534,27 @@
     // Approvals list (delegated)
     els.approvalsList.addEventListener('click', handleApprovalsListClick);
     els.approveAllBtn.addEventListener('click', handleApproveAll);
-    els.exportExcelBtn.addEventListener('click', exportTodayToExcel);
 
-    // Change #4: filter dropdowns — cascading repopulation + re-render
+    // Change #4 (updated): cascading filter dropdowns, Branch comes first
+    els.filterBranch.addEventListener('change', () => {
+      state.approvalFilterBranch = els.filterBranch.value;
+      state.approvalFilterYear   = '';
+      state.approvalFilterDay    = '';
+      state.approvalFilterTime   = '';
+      populateApprovalFilters();
+      renderApprovalsList();
+    });
     els.filterYear.addEventListener('change', () => {
       state.approvalFilterYear = els.filterYear.value;
       state.approvalFilterDay  = '';
       state.approvalFilterTime = '';
-      populateApprovalFilters();
+      populateDayFilter();
+      populateTimeFilter();
       renderApprovalsList();
     });
     els.filterDay.addEventListener('change', () => {
       state.approvalFilterDay  = els.filterDay.value;
       state.approvalFilterTime = '';
-      populateDayFilter();
       populateTimeFilter();
       renderApprovalsList();
     });
@@ -540,9 +583,18 @@
     els.addStudentModal.addEventListener('click', (e) => { if (e.target === els.addStudentModal) closeAddStudentModal(); });
     els.saveNewStudentBtn.addEventListener('click', saveNewStudent);
 
-    // Change #2: update ID preview live when year changes
+    // Change #2: update ID preview live when year or branch changes
     els.newStudentYear.addEventListener('change', updateIdPreview);
-    els.newStudentBranch.addEventListener('change', updateIdPreview); // Change #2: react to branch too
+    els.newStudentBranch.addEventListener('change', updateIdPreview);
+
+    // ── Task 3 — Reports expand modal ──
+    els.reportExpandClose.addEventListener('click', closeReportExpandModal);
+    els.reportExpandModal.addEventListener('click', (e) => {
+      if (e.target === els.reportExpandModal) closeReportExpandModal();
+    });
+    els.reportExpandSearch.addEventListener('input', () => {
+      renderExpandModalList(state.reportExpandGroupKey, els.reportExpandSearch.value.trim().toLowerCase());
+    });
   }
 
   /**
@@ -586,7 +638,6 @@
     els.loginModal.setAttribute('aria-hidden', 'true');
     els.app.classList.remove('hidden');
 
-    // Default to attendance view on login
     switchTab('attendance');
     buildGroupChips();
     renderStudentsList();
@@ -632,15 +683,10 @@
     }
   }
 
-  /**
-   * Pushes approved records and pending-creation students to the API.
-   * Change #5: payload only ever contains present records; absent field is gone.
-   */
   async function triggerSync() {
     if (state.isSyncing || !navigator.onLine) return;
 
     const pendingStudents = await db.getStudentsPendingCreation();
-    // Only push approved/failed records — pending records wait for admin approval.
     const toSyncRecords   = state.records.filter((r) => r.status === 'approved' || r.status === 'failed');
 
     if (pendingStudents.length === 0 && toSyncRecords.length === 0) return;
@@ -648,7 +694,6 @@
     state.isSyncing = true;
     updateSyncBadge();
 
-    // Push new students
     for (const student of pendingStudents) {
       try {
         const ok = await pushStudentToApi(student);
@@ -658,7 +703,6 @@
       } catch (err) { /* keep trying next time */ }
     }
 
-    // Push approved records
     let recSuccess = 0, recFail = 0;
     for (const record of toSyncRecords) {
       try {
@@ -690,13 +734,9 @@
 
     updatePendingBadge();
     if (state.activeTab === 'approvals') renderApprovalsView();
+    if (state.activeTab === 'reports')   renderReportsView();
   }
 
-  /**
-   * Change #5: no attendance field for absent; all records are implicitly present.
-   * The payload sends the captured checkin timestamp so the backend knows when
-   * the student walked in.
-   */
   async function pushRecordToApi(record) {
     if (!isApiConfigured()) {
       console.info('[Sync] No API endpoint — simulating push.', record);
@@ -712,11 +752,10 @@
           studentId:     record.studentId,
           studentName:   record.studentName,
           group:         record.group,
+          branch:        record.branch,
           year:          record.year,
           day:           record.day,
           time:          record.time,
-          // Change #5: attendance is always 'present' — field kept for API
-          // compatibility but value is always present.
           attendance:    'present',
           checkinAt:     record.checkinAt,
           homeworkGrade: record.homeworkGrade,
@@ -789,7 +828,6 @@
     const groups = Array.from(new Set(state.students.map((s) => s.group).filter(Boolean))).sort();
     els.groupChips.innerHTML = '<button class="chip active" data-group="all">الكل</button>' +
       groups.map((g) => `<button class="chip" data-group="${escapeHtml(g)}">${escapeHtml(g)}</button>`).join('');
-    // Re-activate the current group chip
     $$('.chip', els.groupChips).forEach((c) => {
       c.classList.toggle('active', c.dataset.group === state.activeGroup);
     });
@@ -813,10 +851,7 @@
   function getTodayActiveRecordForStudent(studentId) {
     const today = todayKey();
     const candidates = state.records.filter(
-      (r) => r.studentId === studentId &&
-             r.dateKey   === today     &&
-             r.status    !== 'approved' &&
-             r.status    !== 'synced'
+      (r) => r.studentId === studentId && r.dateKey === today
     );
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
@@ -848,7 +883,6 @@
     node.querySelector('.student-id').textContent     = student.id;
     node.querySelector('.tag-group').textContent      = student.group || '—';
 
-    // اسم السنتر ورقم هاتف ولي الأمر تحت اسم الطالب مباشرة
     const branchEl = node.querySelector('[data-role="studentBranch"]');
     const phoneEl  = node.querySelector('[data-role="studentPhone"]');
     const subSep   = node.querySelector('[data-role="subSep"]');
@@ -866,7 +900,6 @@
       tags.appendChild(pendingTag);
     }
 
-    // Default max grades
     const hwMaxInput   = node.querySelector('[data-field="homeworkMax"]');
     const examMaxInput = node.querySelector('[data-field="examMax"]');
     if (hwMaxInput)   hwMaxInput.value   = CONFIG.DEFAULT_HOMEWORK_MAX;
@@ -880,20 +913,18 @@
     const saveBtn        = node.querySelector('[data-action="save"]');
 
     if (existingRecord) {
-      // Fill in saved grades/notes
-      const hw   = node.querySelector('[data-field="homeworkGrade"]');
-      const hwM  = node.querySelector('[data-field="homeworkMax"]');
-      const ex   = node.querySelector('[data-field="examGrade"]');
-      const exM  = node.querySelector('[data-field="examMax"]');
+      const hw    = node.querySelector('[data-field="homeworkGrade"]');
+      const hwM   = node.querySelector('[data-field="homeworkMax"]');
+      const ex    = node.querySelector('[data-field="examGrade"]');
+      const exM   = node.querySelector('[data-field="examMax"]');
       const notes = node.querySelector('[data-field="notes"]');
-      if (existingRecord.homeworkGrade != null) hw.value   = existingRecord.homeworkGrade;
-      if (existingRecord.homeworkMax   != null) hwM.value  = existingRecord.homeworkMax;
-      if (existingRecord.examGrade     != null) ex.value   = existingRecord.examGrade;
-      if (existingRecord.examMax       != null) exM.value  = existingRecord.examMax;
+      if (existingRecord.homeworkGrade != null) hw.value    = existingRecord.homeworkGrade;
+      if (existingRecord.homeworkMax   != null) hwM.value   = existingRecord.homeworkMax;
+      if (existingRecord.examGrade     != null) ex.value    = existingRecord.examGrade;
+      if (existingRecord.examMax       != null) exM.value   = existingRecord.examMax;
       if (existingRecord.notes)                 notes.value = existingRecord.notes;
 
       if (existingRecord.status === 'draft') {
-        // Step 1 complete — show draft confirmation banner
         card.classList.add('draft-active');
         presentBtn.classList.add('active');
         draftConfirm.classList.remove('hidden');
@@ -903,20 +934,31 @@
         saveBtn.disabled = false;
         updateStatusPill(statusPill, 'draft');
       } else if (existingRecord.status === 'pending' || existingRecord.status === 'failed') {
-        // Both steps done
         card.classList.add('draft-active');
         presentBtn.classList.add('active');
         draftConfirm.classList.remove('hidden');
         if (existingRecord.checkinAt) {
           draftTime.textContent = `في ${new Date(existingRecord.checkinAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
         }
-        saveBtn.disabled = false;
         saveBtn.innerHTML = '<span>📤</span> تم الإرسال للاعتماد';
-        saveBtn.disabled = true; // Already sent for approval
+        saveBtn.disabled = true;
         updateStatusPill(statusPill, 'pending');
+      } else if (existingRecord.status === 'approved' || existingRecord.status === 'synced') {
+        card.classList.add('draft-active');
+        presentBtn.classList.add('active');
+        presentBtn.disabled = true;
+        draftConfirm.classList.remove('hidden');
+        if (existingRecord.checkinAt) {
+          draftTime.textContent = `في ${new Date(existingRecord.checkinAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
+        }
+        hw.disabled = true; hwM.disabled = true;
+        ex.disabled = true; exM.disabled = true;
+        notes.disabled = true;
+        saveBtn.innerHTML = '<span>✅</span> تم الاعتماد';
+        saveBtn.disabled = true;
+        updateStatusPill(statusPill, existingRecord.status);
       }
     } else {
-      // No record yet — save button stays disabled until حاضر is pressed
       saveBtn.disabled = true;
       updateStatusPill(statusPill, null);
     }
@@ -946,23 +988,15 @@
     if (!card) return;
     const studentId = card.dataset.id;
 
-    // Change #3: Step 1 — "حاضر" button click
     if (e.target.closest('[data-action="present"]')) {
       handlePresentClick(card, studentId);
       return;
     }
-
-    // Change #3: Step 2 — "إرسال للاعتماد" button click
     if (e.target.closest('[data-action="save"]')) {
       handleSendForApproval(card, studentId);
     }
   }
 
-  /**
-   * Change #3 — Step 1:
-   * Immediately create a `draft` record with the precise checkin timestamp.
-   * Visually: green border + banner. Unlocks the "إرسال للاعتماد" button.
-   */
   async function handlePresentClick(card, studentId) {
     const student = state.students.find((s) => String(s.id) === String(studentId));
     if (!student) return;
@@ -973,7 +1007,6 @@
     const draftTime    = card.querySelector('[data-role="draftTime"]');
     const statusPill   = card.querySelector('[data-role="statusPill"]');
 
-    // Prevent double-tap re-creating if already in draft/pending
     const existing = getTodayActiveRecordForStudent(studentId);
     if (existing && (existing.status === 'pending' || existing.status === 'failed')) {
       showToast(`${student.name} تم إرساله للاعتماد مسبقًا`, 'info');
@@ -986,10 +1019,11 @@
       recordId:      existing ? existing.recordId : uid('rec'),
       studentId:     student.id,
       studentName:   student.name,
-      group:         student.group || '',
-      year:          student.year  || '',
-      day:           student.day   || '',
-      time:          student.time  || '',
+      group:         student.group  || '',
+      branch:        student.branch || '',
+      year:          student.year   || '',
+      day:           student.day    || '',
+      time:          student.time   || '',
       checkinAt:     existing ? existing.checkinAt : now,
       homeworkGrade: null,
       homeworkMax:   CONFIG.DEFAULT_HOMEWORK_MAX,
@@ -1005,7 +1039,6 @@
     await db.upsertRecord(record);
     state.records = await db.getAllRecords();
 
-    // Visual feedback
     card.classList.add('draft-active');
     presentBtn.classList.add('active');
     draftConfirm.classList.remove('hidden');
@@ -1018,11 +1051,6 @@
     updatePendingBadge();
   }
 
-  /**
-   * Change #3 — Step 2:
-   * Read grades/notes from the card, upgrade the draft record to `pending`.
-   * Change #5: no absent field written anywhere.
-   */
   async function handleSendForApproval(card, studentId) {
     const student = state.students.find((s) => String(s.id) === String(studentId));
     if (!student) return;
@@ -1030,7 +1058,6 @@
     const saveBtn    = card.querySelector('[data-action="save"]');
     const statusPill = card.querySelector('[data-role="statusPill"]');
 
-    // Must have a draft record first (step 1)
     const existing = getTodayActiveRecordForStudent(studentId);
     if (!existing || existing.status !== 'draft') {
       showToast('من فضلك سجّل الحضور أولاً (اضغط حاضر)', 'error');
@@ -1057,7 +1084,6 @@
     await db.upsertRecord(updated);
     state.records = await db.getAllRecords();
 
-    // Lock the button and confirm
     saveBtn.innerHTML = '<span>📤</span> تم الإرسال للاعتماد';
     saveBtn.disabled  = true;
     card.classList.add('saved-flash');
@@ -1077,7 +1103,6 @@
     els.pendingCountDisplay.textContent = pendingCount;
     els.localQueueSummary.classList.toggle('hidden', pendingCount === 0);
 
-    // Tab badge: only show pending (not draft) in the approvals tab counter
     const approvalCount = state.records.filter((r) => r.status === 'pending' || r.status === 'failed').length;
     els.pendingTabBadge.textContent = approvalCount;
     els.pendingTabBadge.classList.toggle('hidden', approvalCount === 0);
@@ -1089,13 +1114,6 @@
      CHANGE #2 — SMART STUDENT ID GENERATION
      =================================================================== */
 
-  /**
-   * Returns the ID base for a year string based on the school stage keyword.
-   *   "ابتدائي"  → 1000
-   *   "إعدادي"   → 2000
-   *   "ثانوي"    → 3000
-   *   (fallback) → 1000
-   */
   function getIdBaseForYear(year) {
     if (!year) return CONFIG.ID_BASE_PRIMARY;
     if (year.includes('ابتدائي')) return CONFIG.ID_BASE_PRIMARY;
@@ -1104,70 +1122,49 @@
     return CONFIG.ID_BASE_PRIMARY;
   }
 
-  /**
-   * Looks up a custom {start, end} range for a given branch + year, if one
-   * has been configured in BRANCH_YEAR_RANGES. Returns null otherwise so
-   * the caller can fall back to the legacy stage-based range.
-   */
-  /**
-   * Change #2 — Smart Dynamic ID Generation
-   * يولد النطاقات ديناميكياً بناءً على ترتيب الفروع والمراحل في الإعدادات
-   */
-  /**
-   * Change #2 — Smart Dynamic ID Generation
-   * يولد النطاقات ديناميكياً بناءً على ترتيب الفروع والمراحل في الإعدادات
-   */
   function buildDynamicRanges() {
     const ranges = {};
-    // استخدام الصيغة الآمنة بدلاً منعلامة الاستفهام
     const branches = (state.settings && state.settings.branches) ? state.settings.branches : FALLBACK_SETTINGS.branches;
-    const years = (state.settings && state.settings.years) ? state.settings.years : FALLBACK_SETTINGS.years;
-    
-    const RANGE_SIZE_PER_BRANCH = 200; // 200 رقم لكل فرع
-    const BASE_START_ID = 200; // أول فرع يبدأ من رقم 200
+    const years    = (state.settings && state.settings.years)    ? state.settings.years    : FALLBACK_SETTINGS.years;
+
+    const RANGE_SIZE_PER_BRANCH = 200;
+    const BASE_START_ID = 200;
 
     if (!branches || !years || years.length === 0) return ranges;
 
-    // حساب عدد الأرقام لكل مرحلة داخل الفرع الواحد
     const sizePerYear = Math.floor(RANGE_SIZE_PER_BRANCH / years.length);
 
     branches.forEach((branch, branchIndex) => {
       ranges[branch] = {};
       const branchStart = BASE_START_ID + (branchIndex * RANGE_SIZE_PER_BRANCH);
-      
+
       years.forEach((year, yearIndex) => {
         const yearStart = branchStart + (yearIndex * sizePerYear);
-        // المرحلة الأخيرة تأخذ ما تبقى من النطاق لضمان تغطية الـ 200 رقم بالكامل
-        const yearEnd = (yearIndex === years.length - 1) 
-                        ? (branchStart + RANGE_SIZE_PER_BRANCH - 1) 
-                        : (yearStart + sizePerYear - 1);
-        
+        const yearEnd   = (yearIndex === years.length - 1)
+                          ? (branchStart + RANGE_SIZE_PER_BRANCH - 1)
+                          : (yearStart + sizePerYear - 1);
         ranges[branch][year] = { start: yearStart, end: yearEnd };
       });
     });
 
     return ranges;
   }
-  /**
-   * يبحث عن النطاق المخصص للفرع والمرحلة باستخدام الدالة الديناميكية.
-   */
+
   function getCustomRange(branch, year) {
     const dynamicRanges = buildDynamicRanges();
-    const branchRanges = dynamicRanges[branch];
+    const branchRanges  = dynamicRanges[branch];
     if (!branchRanges) return null;
     return branchRanges[year] || null;
   }
 
- function generateNextStudentId(branch, year) {
+  function generateNextStudentId(branch, year) {
     const customRange = getCustomRange(branch, year);
 
     let start, end;
     if (customRange) {
-      // تم العثور على النطاق الديناميكي المخصص
       start = customRange.start;
       end   = customRange.end;
     } else {
-      // Fallback: legacy stage-based range (لا يوجد فرع أو مرحلة مسجلة)
       start = getIdBaseForYear(year);
       end   = start + 999;
     }
@@ -1181,10 +1178,8 @@
     });
 
     const nextId = maxId + 1;
-    return nextId > end ? null : String(nextId); // null = range exhausted
+    return nextId > end ? null : String(nextId);
   }
-
-
 
   function updateIdPreview() {
     const branch = els.newStudentBranch.value;
@@ -1263,7 +1258,7 @@
     }
 
     const group  = buildGroupLabel(year, branch);
-    const nextId = generateNextStudentId(branch, year); // Change #2
+    const nextId = generateNextStudentId(branch, year);
 
     if (nextId === null) {
       showToast('⚠️ انتهى النطاق المخصص لهذا السنتر/المرحلة، برجاء مراجعة الإدارة', 'error');
@@ -1297,19 +1292,17 @@
   }
 
   /* ===================================================================
-     CHANGE #4 — DRILL-DOWN APPROVALS VIEW
+     CHANGE #4 (UPDATED) — DRILL-DOWN APPROVALS VIEW
+     Now: Branch → Year → Day → Time
+     Plus: search bar within the rendered cards
      =================================================================== */
 
-  /**
-   * Renders the full approvals view: stats + cascading filters + list.
-   */
   function renderApprovalsView() {
-    // Stats
-    const totalStudents  = state.students.length;
-    const activeGroups   = new Set(state.students.map((s) => s.group)).size;
-    const pendingAll     = state.records.filter((r) => r.status === 'pending' || r.status === 'failed');
-    const today          = todayKey();
-    const approvedToday  = state.records.filter(
+    const totalStudents = state.students.length;
+    const activeGroups  = new Set(state.students.map((s) => s.group)).size;
+    const pendingAll    = state.records.filter((r) => r.status === 'pending' || r.status === 'failed');
+    const today         = todayKey();
+    const approvedToday = state.records.filter(
       (r) => (r.status === 'approved' || r.status === 'synced') && r.dateKey === today
     );
 
@@ -1318,63 +1311,65 @@
     els.statPendingApprovals.textContent = pendingAll.length;
     els.statApprovedToday.textContent    = approvedToday.length;
 
-    // Populate filter dropdowns from live pending records
     populateApprovalFilters();
-
-    // Render the filtered list
     renderApprovalsList();
   }
 
   /**
-   * Change #4: Populates all three filter dropdowns from the current set of
-   * pending records. Each dropdown only shows values that exist in the data.
+   * Populates Branch first, then cascades down.
    */
   function populateApprovalFilters() {
     const pending = state.records.filter((r) => r.status === 'pending' || r.status === 'failed');
 
-    // Year filter: all unique years in pending
-    const years = Array.from(new Set(pending.map((r) => r.year).filter(Boolean))).sort();
-    const savedYear = state.approvalFilterYear;
-    els.filterYear.innerHTML = '<option value="">— كل الصفوف —</option>' +
-      years.map((y) => `<option value="${escapeHtml(y)}" ${y === savedYear ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
-    state.approvalFilterYear = els.filterYear.value; // may reset if saved value is gone
+    // Branch filter
+    const branches    = Array.from(new Set(pending.map((r) => r.branch).filter(Boolean))).sort();
+    const savedBranch = state.approvalFilterBranch;
+    els.filterBranch.innerHTML = '<option value="">— كل السنتر —</option>' +
+      branches.map((b) => `<option value="${escapeHtml(b)}" ${b === savedBranch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('');
+    state.approvalFilterBranch = els.filterBranch.value;
 
+    populateYearFilter();
     populateDayFilter();
     populateTimeFilter();
   }
 
-  /**
-   * Populate the Day dropdown based on the currently selected Year filter.
-   */
-  function populateDayFilter() {
-    const pending = getYearFilteredPending();
-    const days    = Array.from(new Set(pending.map((r) => r.day).filter(Boolean))).sort();
-    const savedDay = state.approvalFilterDay;
+  function populateYearFilter() {
+    const pending   = getBranchFilteredPending();
+    const years     = Array.from(new Set(pending.map((r) => r.year).filter(Boolean))).sort();
+    const savedYear = state.approvalFilterYear;
+    els.filterYear.innerHTML = '<option value="">— كل الصفوف —</option>' +
+      years.map((y) => `<option value="${escapeHtml(y)}" ${y === savedYear ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
+    state.approvalFilterYear = els.filterYear.value;
+  }
 
+  function populateDayFilter() {
+    const pending  = getYearFilteredPending();
+    const days     = Array.from(new Set(pending.map((r) => r.day).filter(Boolean))).sort();
+    const savedDay = state.approvalFilterDay;
     els.filterDay.innerHTML = '<option value="">— كل الأيام —</option>' +
       days.map((d) => `<option value="${escapeHtml(d)}" ${d === savedDay ? 'selected' : ''}>${escapeHtml(d)}</option>`).join('');
     state.approvalFilterDay = els.filterDay.value;
-
-    populateTimeFilter();
   }
 
-  /**
-   * Populate the Time dropdown based on Year + Day filters.
-   */
   function populateTimeFilter() {
     const pending   = getDayFilteredPending();
     const times     = Array.from(new Set(pending.map((r) => r.time).filter(Boolean))).sort();
     const savedTime = state.approvalFilterTime;
-
     els.filterTime.innerHTML = '<option value="">— كل المواعيد —</option>' +
       times.map((t) => `<option value="${escapeHtml(t)}" ${t === savedTime ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
     state.approvalFilterTime = els.filterTime.value;
   }
 
-  function getYearFilteredPending() {
+  function getBranchFilteredPending() {
     const all = state.records.filter((r) => r.status === 'pending' || r.status === 'failed');
-    if (!state.approvalFilterYear) return all;
-    return all.filter((r) => r.year === state.approvalFilterYear);
+    if (!state.approvalFilterBranch) return all;
+    return all.filter((r) => r.branch === state.approvalFilterBranch);
+  }
+
+  function getYearFilteredPending() {
+    const branchFiltered = getBranchFilteredPending();
+    if (!state.approvalFilterYear) return branchFiltered;
+    return branchFiltered.filter((r) => r.year === state.approvalFilterYear);
   }
 
   function getDayFilteredPending() {
@@ -1384,21 +1379,32 @@
   }
 
   /**
-   * Returns the final filtered set respecting all three cascading filters.
+   * Returns the final filtered set respecting all four cascading filters.
    */
   function getFullyFilteredPending() {
     let list = state.records.filter((r) => r.status === 'pending' || r.status === 'failed');
-    if (state.approvalFilterYear) list = list.filter((r) => r.year === state.approvalFilterYear);
-    if (state.approvalFilterDay)  list = list.filter((r) => r.day  === state.approvalFilterDay);
-    if (state.approvalFilterTime) list = list.filter((r) => r.time === state.approvalFilterTime);
+    if (state.approvalFilterBranch) list = list.filter((r) => r.branch === state.approvalFilterBranch);
+    if (state.approvalFilterYear)   list = list.filter((r) => r.year   === state.approvalFilterYear);
+    if (state.approvalFilterDay)    list = list.filter((r) => r.day    === state.approvalFilterDay);
+    if (state.approvalFilterTime)   list = list.filter((r) => r.time   === state.approvalFilterTime);
     return list;
   }
 
   /**
-   * Renders only the filtered pending records. "Approve All" acts on this filtered set.
+   * Renders the filtered pending records, further narrowed by the search box.
    */
   function renderApprovalsList() {
-    const filtered = getFullyFilteredPending();
+    let filtered = getFullyFilteredPending();
+
+    // ── Task 2 — apply in-view search ──
+    const q = state.approvalsSearchQuery;
+    if (q) {
+      filtered = filtered.filter((r) =>
+        (r.studentName || '').toLowerCase().includes(q) ||
+        String(r.studentId || '').toLowerCase().includes(q)
+      );
+    }
+
     els.approvalsList.innerHTML = '';
 
     if (filtered.length === 0) {
@@ -1433,12 +1439,9 @@
       timeEl.textContent = formatRelativeTime(record.updatedAt || record.createdAt);
     }
 
-    // Change #5: attendance pill is always "حاضر" — no غائب pill needed
     const attendancePill = node.querySelector('[data-role="attendancePill"]');
     attendancePill.textContent = '✅ حاضر';
     attendancePill.classList.add('present-pill');
-
-    // Checkin time if captured
     if (record.checkinAt) {
       const checkinLabel = new Date(record.checkinAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
       attendancePill.textContent = `✅ حاضر — ${checkinLabel}`;
@@ -1454,8 +1457,8 @@
 
     node.querySelector('[data-role="notesText"]').textContent = record.notes || '';
 
-    // Build meta line: year, day, time
-    const metaParts = [record.year, record.day, record.time].filter(Boolean);
+    // ── Task 2: include branch in meta line ──
+    const metaParts = [record.branch, record.year, record.day, record.time].filter(Boolean);
     node.querySelector('[data-role="metaText"]').textContent = metaParts.join(' — ') || '—';
 
     return node;
@@ -1501,59 +1504,50 @@
   }
 
   /**
-   * Change #4: "Approve All" approves ONLY the currently filtered visible set.
-   */
-  /**
-   * Change #4 & #5: "Approve All" approves ONLY the currently filtered visible set.
-   * After syncing the present records, it triggers the backend to calculate absentees.
-   */
-  /**
-   * "Approve All" approves ONLY the currently filtered visible set.
-   * After syncing the present records, it triggers the backend to calculate absentees
-   * accurately based on (Year + Group (which includes Branch) + Day + Time).
+   * Task 3 update: "Approve All" now sends branch explicitly in finalize_group payload.
    */
   async function handleApproveAll() {
     const filtered = getFullyFilteredPending();
     if (filtered.length === 0) return;
 
-    // Build a description of the active filter for the confirm message
     const filterDesc = [
-      state.approvalFilterYear && `الصف: ${state.approvalFilterYear}`,
-      state.approvalFilterDay  && `اليوم: ${state.approvalFilterDay}`,
-      state.approvalFilterTime && `الموعد: ${state.approvalFilterTime}`,
+      state.approvalFilterBranch && `السنتر: ${state.approvalFilterBranch}`,
+      state.approvalFilterYear   && `الصف: ${state.approvalFilterYear}`,
+      state.approvalFilterDay    && `اليوم: ${state.approvalFilterDay}`,
+      state.approvalFilterTime   && `الموعد: ${state.approvalFilterTime}`,
     ].filter(Boolean).join(' / ') || 'جميع الفلاتر';
 
     openConfirm(
       'اعتماد السجلات المرشّحة',
       `سيتم اعتماد ${filtered.length} سجل (${filterDesc}) وإرسالها دفعة واحدة. هل تريد المتابعة؟`,
       async () => {
-        // 1. Gather exact sessions to finalize (Year + Group + Day + Time)
+        // 1. Gather exact sessions to finalize (Branch + Year + Group + Day + Time)
         const sessionsToFinalize = {};
 
         for (const record of filtered) {
-          // الملاحظة هنا: record.group متخزن فيها (الصف + الفرع) مع بعض
           if (record.year && record.day && record.time && record.dateKey) {
-            const key = `${record.year}|${record.group}|${record.day}|${record.time}|${record.dateKey}`;
+            const key = `${record.branch}|${record.year}|${record.group}|${record.day}|${record.time}|${record.dateKey}`;
             sessionsToFinalize[key] = {
-              year: record.year,
-              group: record.group,
-              day: record.day,
-              time: record.time,
-              dateKey: record.dateKey
+              branch:  record.branch  || '',
+              year:    record.year,
+              group:   record.group,
+              day:     record.day,
+              time:    record.time,
+              dateKey: record.dateKey,
             };
           }
           await db.updateRecordStatus(record.recordId, 'approved', { approvedAt: Date.now() });
         }
-        
+
         state.records = await db.getAllRecords();
         renderApprovalsView();
         updatePendingBadge();
         showToast(`تم اعتماد ${filtered.length} سجل بنجاح، جاري الرفع...`, 'success');
-        
-        // 2. Wait for the sync to push these records to the "Logs" sheet
+
+        // 2. Push approved records to API
         await triggerSync();
 
-        // 3. Send the exact session details to the backend to calculate absentees accurately
+        // 3. Send exact session details to backend (includes branch) for absentee calc
         if (isApiConfigured()) {
           for (const key in sessionsToFinalize) {
             const session = sessionsToFinalize[key];
@@ -1562,13 +1556,14 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({
-                  type: 'finalize_group',
-                  year: session.year,
-                  group: session.group,
-                  day: session.day,
-                  time: session.time,
-                  dateKey: session.dateKey
-                })
+                  type:    'finalize_group',
+                  branch:  session.branch,
+                  year:    session.year,
+                  group:   session.group,
+                  day:     session.day,
+                  time:    session.time,
+                  dateKey: session.dateKey,
+                }),
               });
             } catch (err) {
               console.warn('[Sync] Failed to trigger finalize_group for:', session, err);
@@ -1578,6 +1573,7 @@
       }
     );
   }
+
   /* ===================================================================
      EDIT MODAL (from approvals queue)
      =================================================================== */
@@ -1589,7 +1585,6 @@
     state.editingRecordId = recordId;
     els.editStudentName.textContent = `${record.studentName} — #${record.studentId} — ${record.group || ''}`;
 
-    // Change #5: no attendance toggle in edit modal; record is always present
     els.editHomeworkGrade.value = record.homeworkGrade != null ? record.homeworkGrade : '';
     els.editHomeworkMax.value   = record.homeworkMax   != null ? record.homeworkMax   : CONFIG.DEFAULT_HOMEWORK_MAX;
     els.editExamGrade.value     = record.examGrade     != null ? record.examGrade     : '';
@@ -1624,7 +1619,7 @@
       examGrade:     examGrade     === '' ? null : Number(examGrade),
       examMax:       examMax       === '' ? CONFIG.DEFAULT_EXAM_MAX : Number(examMax),
       notes,
-      status:    'pending', // edits reset back to pending for re-approval
+      status:    'pending',
       updatedAt: Date.now(),
     };
 
@@ -1654,76 +1649,227 @@
   }
 
   /* ===================================================================
-     EXCEL EXPORT
+     TASK 3 — REPORTS ENGINE (Daily Auto-Reset)
      =================================================================== */
 
-  function csvEscape(value) {
-    const str = value == null ? '' : String(value);
-    if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-    return str;
-  }
+  /**
+   * Renders the full reports view.
+   *
+   * Logic:
+   *  1. Filter state.records for approved/synced entries with dateKey === today.
+   *     (At midnight the date changes → zero results → auto-reset.)
+   *  2. Group by composite key: branch|year|day|time.
+   *  3. For each group, compute:
+   *     - Attended: count of records in this group.
+   *     - Total:    count of students in state.students matching the same
+   *                 branch + year + day + time.
+   *     - Absent:   Total − Attended (floored at 0).
+   *  4. Render one report card per group.
+   */
+  function renderReportsView() {
+    const today = todayKey();
 
-  function exportTodayToExcel() {
-    const today       = todayKey();
-    // Change #5: only export present records; no absent entries exist
-    const todayRecords = state.records.filter((r) => r.dateKey === today && r.status !== 'draft');
+    // Display today's date in the header badge
+    if (els.reportsTodayLabel) {
+      els.reportsTodayLabel.textContent = new Date().toLocaleDateString('ar-EG', {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      });
+    }
+
+    // Only today's finalised records
+    const todayRecords = state.records.filter(
+      (r) => (r.status === 'approved' || r.status === 'synced') && r.dateKey === today
+    );
 
     if (todayRecords.length === 0) {
-      showToast('لا توجد سجلات اليوم لتصديرها', 'error');
+      els.reportCardsList.innerHTML = '';
+      els.noReports.classList.remove('hidden');
+      return;
+    }
+    els.noReports.classList.add('hidden');
+
+    // Group records by Branch|Year|Day|Time
+    const groups = {};
+    todayRecords.forEach((r) => {
+      const key = `${r.branch || ''}|${r.year || ''}|${r.day || ''}|${r.time || ''}`;
+      if (!groups[key]) {
+        groups[key] = {
+          key,
+          branch:  r.branch  || '',
+          year:    r.year    || '',
+          day:     r.day     || '',
+          time:    r.time    || '',
+          records: [],
+        };
+      }
+      groups[key].records.push(r);
+    });
+
+    // Render cards
+    els.reportCardsList.innerHTML = '';
+    const frag = document.createDocumentFragment();
+
+    Object.values(groups).forEach((group) => {
+      // Total students in this exact slot
+      const totalStudents = state.students.filter((s) =>
+        (s.branch || '') === group.branch &&
+        (s.year   || '') === group.year   &&
+        (s.day    || '') === group.day    &&
+        (s.time   || '') === group.time
+      ).length;
+
+      const attended = group.records.length;
+      const absent   = Math.max(0, totalStudents - attended);
+
+      frag.appendChild(buildReportCard(group, totalStudents, attended, absent));
+    });
+
+    els.reportCardsList.appendChild(frag);
+
+    // Wire up mini search bars (added to DOM above)
+    $$('.report-mini-search-input', els.reportCardsList).forEach((input) => {
+      input.addEventListener('input', () => {
+        const key        = input.closest('.report-card').dataset.groupKey;
+        const listEl     = input.closest('.report-card').querySelector('[data-role="attendeeList"]');
+        const q          = input.value.trim().toLowerCase();
+        const groupObj   = Object.values(groups).find((g) => g.key === key);
+        if (groupObj) renderAttendeeList(listEl, groupObj.records, q);
+      });
+    });
+
+    // Wire up Expand buttons
+    $$('.report-expand-btn', els.reportCardsList).forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const groupKey = btn.closest('.report-card').dataset.groupKey;
+        openReportExpandModal(groupKey, groups);
+      });
+    });
+  }
+
+  /**
+   * Builds a single report card DOM element.
+   */
+  function buildReportCard(group, total, attended, absent) {
+    const node = els.reportCardTemplate.content.cloneNode(true);
+    const card = node.querySelector('.report-card');
+    card.dataset.groupKey = group.key;
+
+    // Title: e.g. "الصف الثاني الإعدادي — سنتر السرايا"
+    const titleParts = [group.year, group.branch].filter(Boolean);
+    node.querySelector('[data-role="groupTitle"]').textContent = titleParts.join(' — ') || '—';
+
+    // Sub: e.g. "الأحد — 04:00 م"
+    const subParts = [group.day, group.time].filter(Boolean);
+    node.querySelector('[data-role="groupSub"]').textContent = subParts.join(' — ') || '';
+
+    // Metrics
+    node.querySelector('[data-role="metricTotal"]').textContent    = total;
+    node.querySelector('[data-role="metricAttended"]').textContent = attended;
+    node.querySelector('[data-role="metricAbsent"]').textContent   = absent;
+
+    // Attendee list
+    const listEl = node.querySelector('[data-role="attendeeList"]');
+    renderAttendeeList(listEl, group.records, '');
+
+    return node;
+  }
+
+  /**
+   * Renders attendee row items into a container, optionally filtered by query.
+   */
+  function renderAttendeeList(containerEl, records, query) {
+    containerEl.innerHTML = '';
+
+    const filtered = query
+      ? records.filter((r) =>
+          (r.studentName || '').toLowerCase().includes(query) ||
+          String(r.studentId || '').toLowerCase().includes(query)
+        )
+      : records;
+
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'report-attendee-empty';
+      empty.textContent = query ? 'لا توجد نتائج مطابقة' : 'لا يوجد حاضرون';
+      containerEl.appendChild(empty);
       return;
     }
 
-    const headers = [
-      'كود الطالب', 'اسم الطالب', 'المجموعة', 'الصف', 'اليوم', 'الموعد',
-      'وقت تسجيل الدخول', 'درجة الواجب', 'من (واجب)',
-      'درجة الامتحان', 'من (امتحان)', 'ملاحظات', 'اعتمدها', 'الحالة', 'التاريخ',
-    ];
-
-    const rows = todayRecords.map((r) => [
-      r.studentId,
-      r.studentName,
-      r.group,
-      r.year   || '',
-      r.day    || '',
-      r.time   || '',
-      r.checkinAt ? new Date(r.checkinAt).toLocaleTimeString('ar-EG') : '',
-      r.homeworkGrade != null ? r.homeworkGrade : '',
-      r.homeworkMax   != null ? r.homeworkMax   : '',
-      r.examGrade     != null ? r.examGrade     : '',
-      r.examMax       != null ? r.examMax       : '',
-      r.notes  || '',
-      r.approvedBy || '',
-      translateStatus(r.status),
-      r.dateKey,
-    ]);
-
-    // \uFEFF UTF-8 BOM ensures Excel opens Arabic text correctly
-    const csvContent = '\uFEFF' +
-      headers.map(csvEscape).join(',') + '\r\n' +
-      rows.map((row) => row.map(csvEscape).join(',')).join('\r\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url  = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href     = url;
-    link.download = `report_${today}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    showToast(`تم تصدير ${todayRecords.length} سجل بنجاح`, 'success');
+    const frag = document.createDocumentFragment();
+    filtered.forEach((r) => {
+      const item = document.createElement('div');
+      item.className = 'report-attendee-item';
+      item.innerHTML = `
+        <div class="report-attendee-avatar">${escapeHtml(initials(r.studentName))}</div>
+        <span class="report-attendee-name">${escapeHtml(r.studentName || '—')}</span>
+        <span class="report-attendee-id">#${escapeHtml(String(r.studentId || ''))}</span>
+      `;
+      frag.appendChild(item);
+    });
+    containerEl.appendChild(frag);
   }
 
-  function translateStatus(status) {
-    switch (status) {
-      case 'draft':    return 'تم تسجيل الدخول';
-      case 'pending':  return 'بانتظار الاعتماد';
-      case 'approved': return 'معتمد (بانتظار الإرسال)';
-      case 'synced':   return 'معتمد ومُرسَل';
-      case 'failed':   return 'فشلت المزامنة';
-      default:         return status || '—';
-    }
+  /* ── Expand Modal ── */
+
+  function openReportExpandModal(groupKey, groups) {
+    const group = Object.values(groups).find((g) => g.key === groupKey);
+    if (!group) return;
+
+    state.reportExpandGroupKey = groupKey;
+
+    // Header info
+    const titleParts = [group.year, group.branch].filter(Boolean);
+    els.reportExpandTitle.textContent = titleParts.join(' — ') || 'التقرير';
+    const subParts = [group.day, group.time].filter(Boolean);
+    els.reportExpandSub.textContent = subParts.join(' — ') || '';
+
+    // Metrics inside modal
+    const totalStudents = state.students.filter((s) =>
+      (s.branch || '') === group.branch &&
+      (s.year   || '') === group.year   &&
+      (s.day    || '') === group.day    &&
+      (s.time   || '') === group.time
+    ).length;
+    const attended = group.records.length;
+    const absent   = Math.max(0, totalStudents - attended);
+
+    els.reportExpandMetrics.innerHTML = `
+      <div class="report-metric report-metric-total">
+        <span class="report-metric-value">${totalStudents}</span>
+        <span class="report-metric-label">إجمالي الطلاب</span>
+      </div>
+      <div class="report-metric report-metric-attended">
+        <span class="report-metric-value">${attended}</span>
+        <span class="report-metric-label">حاضر</span>
+      </div>
+      <div class="report-metric report-metric-absent">
+        <span class="report-metric-value">${absent}</span>
+        <span class="report-metric-label">غائب</span>
+      </div>
+    `;
+
+    // Store group records for search re-filtering
+    els.reportExpandModal.dataset.groupKey = groupKey;
+    // Store the records on the modal element so search can reach them
+    els.reportExpandModal._currentRecords  = group.records;
+
+    els.reportExpandSearch.value = '';
+    renderExpandModalList(groupKey, '');
+
+    els.reportExpandModal.classList.remove('hidden');
+    els.reportExpandModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function renderExpandModalList(groupKey, query) {
+    const records = els.reportExpandModal._currentRecords || [];
+    renderAttendeeList(els.reportExpandList, records, query);
+  }
+
+  function closeReportExpandModal() {
+    state.reportExpandGroupKey = null;
+    els.reportExpandModal._currentRecords = [];
+    els.reportExpandModal.classList.add('hidden');
+    els.reportExpandModal.setAttribute('aria-hidden', 'true');
   }
 
   /* ===================================================================
