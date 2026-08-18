@@ -888,6 +888,28 @@
     const subSep   = node.querySelector('[data-role="subSep"]');
     const hasBranch = !!student.branch;
     const hasPhone  = !!student.phone;
+    // --- الأكواد الجديدة لإضافة اليوم والموعد ---
+    const dayEl = node.querySelector('[data-role="studentDay"]');
+    const timeEl = node.querySelector('[data-role="studentTime"]');
+    const scheduleRow = node.querySelector('[data-role="scheduleRow"]');
+
+    const hasDay = !!student.day;
+    const hasTime = !!student.time;
+
+    // تحويل "م" إلى "PM" و "ص" إلى "AM"
+    let timeFormatted = '';
+    if (hasTime) {
+      timeFormatted = student.time.replace('م', 'PM').replace('ص', 'AM');
+    }
+
+    if (dayEl) dayEl.textContent = hasDay ? student.day : '';
+    if (timeEl) timeEl.textContent = hasTime ? timeFormatted : '';
+
+    // إخفاء الصف بالكامل إذا لم يكن الطالب مسجلاً في يوم أو موعد
+    if (scheduleRow) {
+      scheduleRow.classList.toggle('hidden', !(hasDay || hasTime));
+    }
+    // --------------------------------------------
     branchEl.textContent = hasBranch ? student.branch : '';
     phoneEl.textContent  = hasPhone ? formatPhoneDisplay(student.phone) : '';
     subSep.classList.toggle('hidden', !(hasBranch && hasPhone));

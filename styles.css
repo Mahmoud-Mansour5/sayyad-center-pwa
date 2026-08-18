@@ -1089,3 +1089,41 @@ body:not(.light-theme) .report-attendee-item { border-bottom-color: rgba(255,255
   padding: 12px;
   background: var(--bg-card);
 }
+
+
+/* تنسيق كود الطالب (فوق الاسم، بحجم أكبر ولون مميز) */
+.student-id-main {
+  font-size: 16.5px;
+  font-weight: 900;
+  color: var(--primary);
+  margin-bottom: 2px;
+  letter-spacing: 0.5px;
+}
+
+/* تنسيق صف اليوم والموعد */
+.student-schedule {
+  display: flex; 
+  align-items: center; 
+  gap: 8px; 
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.student-schedule.hidden {
+  display: none !important;
+}
+
+/* شكل إطارات اليوم والموعد */
+.student-schedule-item {
+  background: var(--bg-card-alt);
+  border: 1px solid var(--border-color);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 11.5px; 
+  font-weight: 700; 
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.student-schedule-item:empty {
+  display: none;
+}
