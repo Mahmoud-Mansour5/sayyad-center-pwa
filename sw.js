@@ -15,7 +15,7 @@
  * -------------------------------------------------------------
  */
 
-const CACHE_VERSION = 'v1.2.2';
+const CACHE_VERSION = 'v1.2.3';
 const STATIC_CACHE = `sayyad-static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `sayyad-runtime-${CACHE_VERSION}`;
 
